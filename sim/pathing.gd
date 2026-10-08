@@ -1,7 +1,8 @@
 class_name Pathing
 extends RefCounted
-## Deterministic 4-direction A*. Tie-break is insertion order, so equal
-## costs always resolve the same way.
+## Deterministic 8-direction A*. Cardinal steps cost 10, diagonals cost 14.
+## A diagonal is legal only when both adjacent cardinal tiles are open,
+## so the path cannot cut a corner. Tie-break is insertion order.
 
 
 static func find(walk: PackedByteArray, width: int, height: int, start: Vector2i, goal: Vector2i, extra_cost: Dictionary) -> Array:
@@ -17,7 +18,10 @@ static func find(walk: PackedByteArray, width: int, height: int, start: Vector2i
 	var closed := {}
 	var seq := 0
 	_push(heap, _heur(start, goal), seq, s)
-	var dirs := [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]
+	var dirs := [
+		Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
+	]
 	var found := false
 	while heap.size() > 0:
 		var cur: Dictionary = _pop(heap)
@@ -38,7 +42,10 @@ static func find(walk: PackedByteArray, width: int, height: int, start: Vector2i
 			var ni: int = ny * width + nx
 			if walk[ni] == 0:
 				continue
-			var step: int = 10 + int(extra_cost.get(ni, 0))
+			if d.x != 0 and d.y != 0:
+				if walk[cy * width + nx] == 0 or walk[ny * width + cx] == 0:
+					continue
+			var step: int = (14 if d.x != 0 and d.y != 0 else 10) + int(extra_cost.get(ni, 0))
 			var ng: int = int(gscore[ci]) + step
 			if ng < int(gscore.get(ni, 1 << 30)):
 				gscore[ni] = ng
@@ -69,7 +76,11 @@ static func _idx(t: Vector2i, width: int) -> int:
 
 
 static func _heur(a: Vector2i, b: Vector2i) -> int:
-	return (absi(a.x - b.x) + absi(a.y - b.y)) * 10
+	var dx := absi(a.x - b.x)
+	var dy := absi(a.y - b.y)
+	var diag := mini(dx, dy)
+	var straight := maxi(dx, dy) - diag
+	return diag * 14 + straight * 10
 
 
 static func _before(a: Dictionary, b: Dictionary) -> bool:

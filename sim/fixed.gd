@@ -45,14 +45,13 @@ static func tile_center(tile: Vector2i) -> Vector2i:
 
 
 ## Facing-space offset (+x is forward) into world milli-tiles.
+## Cardinals match the old 4-way rotation. Diagonals use the same basis.
 static func rotate_facing(off: Vector2i, facing: Vector2i) -> Vector2i:
-	if facing.x > 0:
-		return off
-	if facing.x < 0:
-		return Vector2i(-off.x, -off.y)
-	if facing.y < 0:
-		return Vector2i(off.y, -off.x)
-	return Vector2i(-off.y, off.x)
+	var fwd := facing
+	if fwd == Vector2i.ZERO:
+		fwd = Vector2i(1, 0)
+	var right := Vector2i(-fwd.y, fwd.x)
+	return Vector2i(off.x * fwd.x + off.y * right.x, off.x * fwd.y + off.y * right.y)
 
 
 static func mix(h: int, v: int) -> int:

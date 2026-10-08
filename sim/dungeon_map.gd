@@ -29,9 +29,10 @@ func _init() -> void:
 
 func _build() -> void:
 	# Stage 0 — Descent. Regen is a crawl. The seal locks out swarms.
-	_rect("start", "Antechamber", "start", Rect2i(2, 40, 16, 16), "S", 0, 0)
+	# The antechamber sits against the fork so the first fight is a short walk.
+	_rect("start", "Antechamber", "start", Rect2i(18, 42, 12, 12), "S", 0, 0)
 	_cluster(0, 0, 1, "fork", "The Fork", "trapped", "Still Gallery", "cursed", "Whisper Chapel", "summoned", "Skittering Hall", "cross", "Gate Cross", "seal", "Gate Seal", "seal", "E")
-	_hall("corr_sf", "Passage", 0, 0, Vector2i(18, 46), Vector2i(33, 46), ["start", "fork"])
+	_hall("corr_sf", "Passage", 0, 0, Vector2i(30, 46), Vector2i(33, 46), ["start", "fork"])
 	# March into the Wards, with a held nave in the middle.
 	_rect("gallery1", "Bone Nave", "gallery", Rect2i(248, 78, 22, 16), "G", 2, 1)
 	_snake("m1a", 1, 2, "seal", "gallery1", [
@@ -212,6 +213,7 @@ func _place_nodes() -> void:
 			"center": Vector2i(x0 + rw / 2, y0 + rh / 2),
 			"flank": Vector2i(x0 + rw / 2, y0 + 2),
 			"rear": Vector2i(x0 + rw - 3, y0 + rh / 2),
+			"shrine": Vector2i(x0 + 2, y0 + 2),
 		})
 
 

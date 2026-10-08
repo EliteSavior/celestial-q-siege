@@ -11,12 +11,12 @@ const ELIXIR_MAX := 10000 # 100 points
 # That is a real opener, not also a Sunstrike (14) or a Party Heal (15).
 # 1.0.3 was 6500 internal, shown as 6.5 on a 0–10 meter (about two casts).
 const GOLDEN_START := 3600
-const DARK_START := 4200
-# 8 seconds. Until the first angel command resolves, or this many ticks pass,
-# Dark regen is frozen and the turtle clock does not advance. Golden still
-# regens, and the director still spends its opening bank. A party that moves
-# on the first tick never sees the hold.
-const OPENING_GRACE_TICKS := 160
+# Full Dread bar. The director can summon on the first decision.
+const DARK_START := 10000
+# 2 seconds. The pre-combat hold used to be 8s, which pushed the first
+# fight back. Dark regen stays frozen until the first angel command, or
+# until this window ends. Golden still regens. The director still spends.
+const OPENING_GRACE_TICKS := 40
 
 # Internal elixir per tick (100 internal = 1 point). Index is the stage
 # reached (0 descent … 3 approach). Index 4 is the Lucifer phase.
@@ -95,19 +95,25 @@ const TRAP_MIN_DIST := 4000
 
 const TAUNT_RADIUS := 3200
 const TAUNT_TICKS := 80
-# While taunt lasts, Michael's effective threat on that mob is one above
-# the current highest. The bonus is not written into the table, so it ends
-# with the taunt and a higher real threat can hold the mob again.
+# Taunt writes this much threat above the current top, so the snap stays
+# after the force window. A later hit can still pass it.
 const TAUNT_SNAP := 1
+# After a taunt, Michael's damage threat is multiplied again for this long.
+# The boost outlives the force window. 20 seconds at 20 Hz.
+const TAUNT_BOOST_TICKS := 400
+const TAUNT_BOOST_PCT := 100
 # Mobs hold their spawn until a living angel walks into this radius, shares
 # their room (corridors do not count — a march is not a pull), or damages them.
 const AGGRO_RANGE := 4200
 const LEASH_RANGE := 9800
-# Damage dealt is threat. Michael's hits are multiplied so auto-attacks hold
-# a pack; a DPS elixir hit can still pass him. Heals add this percent of the
-# amount healed, split across mobs that are already in the fight.
-const TANK_THREAT_MULT := 400
-const HEAL_THREAT_PCT := 50
+# Damage dealt is threat. 750% puts Michael's autos ahead of the other four
+# angels attacking the same mob. A hard elixir burst, or heals that include
+# overheal, can still pass him. Heals add this percent of the amount cast
+# (not just the health gained), split across mobs already in the fight.
+const TANK_THREAT_MULT := 750
+const HEAL_THREAT_PCT := 100
+# Share of the leader's threat at which the meter calls a pull.
+const THREAT_PULL_PCT := 85
 const SHIELD_WALL_TICKS := 60
 const BODY_BLOCK_TICKS := 80
 # Michael keeps this percent of incoming damage. Highest HP is on the hero row.
@@ -146,6 +152,7 @@ const DISENGAGE_DISTANCE := 2500
 const DISENGAGE_TICKS := 30
 # Weaken is the low cleanse tier (after Silence, Rot, and Mark). Outgoing damage kept.
 const WEAKEN_DEALT := 80
+const WEAKEN_TICKS := 120
 const PHALANX_TICKS := 60
 const PHALANX_ABSORB := 28
 const SCATTER_TICKS := 70
@@ -168,6 +175,9 @@ const ALTAR_RANGE := 1600
 const ALTAR_PER_TICK := 2
 # 400 / 2 ticks = 10s to claim a stake. Long enough to be a hold, short of the turtle.
 const ALTAR_NEED := 400
+# Purifying shrine. Standing on the room's shrine and channeling clears its traps.
+const SHRINE_CHANNEL := 40
+const SHRINE_RANGE := 1600
 const ALTAR_REVIVE_DELAY := 20
 # Lethal damage downs an angel for 3 seconds. Revive rites can still reach
 # them; when the window closes the death is final.
@@ -193,12 +203,19 @@ const ELITE_ATK := 11
 const ELITE_PERIOD := 20
 const ELITE_RANGE := 1300
 const ELITE_SPEED := 88
+# Every Nth swing is also a pulse that reaches the whole fighting team.
+const MOB_AOE_EVERY := 4
+const MOB_AOE_RADIUS := 5200
+const IMP_AOE := 4
+const HEAVY_AOE := 7
+const ELITE_AOE := 9
 
 # The crawl is the siege. Lucifer is the climax, not most of the clock:
-# about two minutes of telegraphs. 1.0.3 was 3700. Golden now funds bursts
-# through the fight, so the same body died in ~85s; 4600 puts a casting
-# party back in the 1.5–2 minute climax without touching mob HP.
-const LUCIFER_HP := 4600
+# about two minutes of telegraphs. 1.0.4 was 4600. Party-wide mob pulses
+# and a full opening Dark bar lengthened that fight past the window;
+# 4000 puts a casting party back in the 1.5–2 minute climax without
+# touching mob HP.
+const LUCIFER_HP := 4000
 const LUCIFER_HP_EARLY := 2100
 const JUDGMENT_DMG := 48
 const CLEAVE_DMG := 34
@@ -246,38 +263,16 @@ static func points_of(internal: int) -> int:
 	return internal / POINT
 
 
+## Elixir abilities have no cooldown. The bar is the only gate.
+## Scatter and Phalanx spend nothing, so they keep a short lockout.
 static func cooldown(ability: String) -> int:
 	match ability:
-		"taunt", "escape_dash", "detect_pulse":
-			return 160
-		"shield_wall", "aoe_zone":
-			return 240
-		"body_block", "self_shield", "phalanx":
+		"phalanx":
 			return 200
-		"single_heal":
-			return 60
-		"party_heal":
-			return 260
-		"slow_revive":
-			return 400
-		"burst", "cleanse":
-			return 100
-		"strike":
-			return 100
-		"sunstrike":
-			return 140
-		"disarm":
-			return 70
-		"beam":
-			return 50
-		"disengage":
-			return 160
-		"emergency_res":
-			return 600
 		"scatter":
 			return 140
 		_:
-			return 40
+			return 0
 
 
 static func summon_cost(unit: String) -> int:
@@ -312,6 +307,8 @@ static func curse_cost(kind: String) -> int:
 			return 1800
 		"mark":
 			return 2000
+		"weaken":
+			return 1400
 		_:
 			return 99999
 
@@ -401,6 +398,16 @@ static func tier_ok(unit: String, rooms_cleared: int) -> bool:
 
 
 ## Dynamic Threat Budgeting. hp_pct is 0-100 collective remaining HP.
+static func mob_aoe(subtype: String) -> int:
+	match subtype:
+		"heavy":
+			return HEAVY_AOE
+		"elite":
+			return ELITE_AOE
+		_:
+			return IMP_AOE
+
+
 static func echo_budget(bank: int, hp_pct: int, early: bool) -> int:
 	var b := bank
 	if hp_pct < 40:

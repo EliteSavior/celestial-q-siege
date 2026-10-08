@@ -20,6 +20,10 @@ var burst_at := 5000
 var burst_loose_at := 2800
 var burst_loose := true
 var pre_shield := true
+# The sim no longer cooldowns elixir rites. This policy still refuses to
+# mash the same rite every decision, or a channel never finishes and the
+# bar never recovers. It is play, not a rule.
+var _cast_at := {}
 
 
 func act(sim) -> void:
@@ -61,45 +65,45 @@ func _defense(sim) -> void:
 		elif name == "cleave" and remain <= react_remain:
 			sim.submit("scatter", {})
 			if pre_shield:
-				sim.submit("ability", {"name": "shield_wall"})
+				_cast_ability(sim, "shield_wall", 80)
 		elif name == "grasp" and remain <= react_remain:
 			sim.submit("phalanx", {})
 		if name == "judgment":
-			sim.submit("ability", {"name": "body_block"})
-			sim.submit("shield", {})
+			_cast_ability(sim, "body_block", 60)
+			_cast_cmd(sim, "shield", 80)
 			if remain <= react_remain - 10:
 				sim.submit("phalanx", {})
 		elif pre_shield and name in ["cleave", "grasp"]:
-			sim.submit("shield", {})
+			_cast_cmd(sim, "shield", 80)
 	for commit in sim._visible_commitments():
 		var plan := str(commit.get("plan", ""))
 		var remain: int = int(commit.get("land", 0)) - int(sim.tick)
 		if plan == "elite" and remain <= react_remain + 30:
-			sim.submit("ability", {"name": "taunt"})
+			_cast_ability(sim, "taunt", 80)
 			sim.submit("phalanx", {})
 		elif plan == "trap_cluster":
-			sim.submit("detect", {})
-			sim.submit("ability", {"name": "shield_wall"})
+			_cast_cmd(sim, "detect", 80)
+			_cast_ability(sim, "shield_wall", 80)
 	if _elite_blinking(sim):
-		sim.submit("ability", {"name": "taunt"})
+		_cast_ability(sim, "taunt", 80)
 		sim.submit("phalanx", {})
 	if _debuffed(sim):
-		sim.submit("cleanse", {})
+		_cast_cmd(sim, "cleanse", 40)
 	if sim.lowest_angel_hp_pct() < heal_below or sim._downed_count() > 0:
-		sim.submit("heal", {})
+		_cast_cmd(sim, "heal", 40)
 	var raphael: Dictionary = sim._hero("raphael")
-	if sim._downed_count() > 0 and not raphael.is_empty() and raphael.alive and sim.golden >= Balance.cost("slow_revive"):
-		sim.submit("ability", {"name": "slow_revive"})
+	if sim._downed_count() > 0 and not raphael.is_empty() and raphael.alive and raphael.casting.is_empty() and sim.golden >= Balance.cost("slow_revive"):
+		_cast_ability(sim, "slow_revive", 80)
 	elif sim._downed_count() > 0 and sim.golden >= Balance.cost("emergency_res"):
-		sim.submit("ability", {"name": "emergency_res"})
+		_cast_ability(sim, "emergency_res", 80)
 	var room := str(sim.party_room())
 	if not pulsed.has(room) and sim.golden >= Balance.cost("detect_pulse") + Balance.cost("single_heal"):
 		var preview: Dictionary = sim.preview("detect")
 		if str(preview.ability) == "disarm" or sim.golden >= Balance.GOLDEN_START:
-			sim.submit("detect", {})
+			_cast_cmd(sim, "detect", 20)
 			pulsed[room] = true
 	elif str(sim.preview("detect").ability) == "disarm":
-		sim.submit("detect", {})
+		_cast_cmd(sim, "detect", 20)
 
 
 func _offense(sim) -> void:
@@ -112,7 +116,32 @@ func _offense(sim) -> void:
 	if sim._downed_count() > 0 and sim.golden < Balance.cost("slow_revive") + Balance.cost("burst"):
 		return
 	if sim.golden >= burst_at or (burst_loose and sim.golden >= burst_loose_at and sim.lowest_angel_hp_pct() > 75):
-		sim.submit("burst", {})
+		_cast_cmd(sim, "burst", 80)
+
+
+func _cast_ability(sim, ability: String, gap: int) -> void:
+	if sim.tick - int(_cast_at.get(ability, -9999)) < gap:
+		return
+	if sim.golden < Balance.cost(ability):
+		return
+	var status: Dictionary = sim.ability_status(ability)
+	if not bool(status.get("ready", false)):
+		return
+	_cast_at[ability] = sim.tick
+	sim.submit("ability", {"name": ability})
+
+
+func _cast_cmd(sim, cmd: String, gap: int) -> void:
+	if sim.tick - int(_cast_at.get(cmd, -9999)) < gap:
+		return
+	var ability := str(sim.preview(cmd).get("ability", ""))
+	if ability == "" or sim.golden < Balance.cost(ability):
+		return
+	var status: Dictionary = sim.ability_status(ability)
+	if not bool(status.get("ready", false)):
+		return
+	_cast_at[cmd] = sim.tick
+	sim.submit(cmd, {})
 
 
 func _move(sim) -> void:

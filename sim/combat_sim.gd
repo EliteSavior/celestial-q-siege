@@ -80,6 +80,11 @@ var shield_wall_until := 0
 var shield_wall_facing := Vector2i(1, 0)
 var taunt_until := 0
 var taunt_id := 0
+# Lasts after the force window. Multiplies Michael's later threat gains.
+var threat_boost_until := 0
+var shrine_progress := 0
+var shrines_done := {}
+var channeling_shrine := false
 var root_until := 0
 var scatter_until := 0
 var iframe_until := 0
@@ -182,6 +187,10 @@ func reset() -> void:
 	shield_wall_facing = Vector2i(1, 0)
 	taunt_until = 0
 	taunt_id = 0
+	threat_boost_until = 0
+	shrine_progress = 0
+	shrines_done = {}
+	channeling_shrine = false
 	root_until = 0
 	scatter_until = 0
 	iframe_until = 0
@@ -257,7 +266,6 @@ func tick_once() -> void:
 	_formation()
 	_sync_room()
 	_passives()
-	_reveal_traps()
 	_maybe_repath()
 	_arm_echo_traps()
 	_trigger_traps()
@@ -269,6 +277,7 @@ func tick_once() -> void:
 	_commitments_land()
 	_lucifer()
 	_stakes()
+	_shrines()
 	_turtle()
 	_resolve_revives()
 	_tick_downed()
@@ -331,8 +340,11 @@ func _exec(c: Dictionary) -> void:
 			_cast_phalanx()
 		"channel_altar":
 			channeling_altar = true
+		"channel_shrine":
+			channeling_shrine = true
 		"stop_channel":
 			channeling_altar = false
+			channeling_shrine = false
 		"spawn":
 			_cmd_spawn(args)
 		"trap":
@@ -510,12 +522,13 @@ func _cast(ability: String, args: Dictionary = {}) -> void:
 func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -> bool:
 	match ability:
 		"taunt":
-			var pulled := _taunt_target()
+			var pulled := _taunt_target(args)
 			if pulled.is_empty():
 				_fail("No one to taunt.")
 				return false
 			taunt_id = int(pulled.id)
 			taunt_until = tick + Balance.TAUNT_TICKS
+			_snap_taunt_threat(pulled)
 			pulled.pulled = true
 			if pulled.get("blink", {}) is Dictionary and not pulled.blink.is_empty():
 				pulled.blink = {}
@@ -564,7 +577,7 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 			_log("Raphael begins a resurrection.", "good")
 			return true
 		"burst":
-			var foe := _focus_or_nearest(owner)
+			var foe := _picked_foe(owner, args, int(owner.range) + 150)
 			if foe.is_empty() or Fixed.dist(owner.pos, foe.pos) > int(owner.range) + 150:
 				_fail("Burst has no target in reach.")
 				return false
@@ -572,7 +585,7 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 			_log("Azrael bursts %s." % foe.name, "good")
 			return true
 		"strike":
-			var strike_foe := _focus_or_nearest(owner)
+			var strike_foe := _picked_foe(owner, args, int(owner.range) + 150)
 			if strike_foe.is_empty() or Fixed.dist(owner.pos, strike_foe.pos) > int(owner.range) + 150:
 				_fail("Strike has no target in reach.")
 				return false
@@ -597,7 +610,7 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 			_log("Detect pulse reveals %d trap%s." % [n, "" if n == 1 else "s"], "info")
 			return true
 		"sunstrike":
-			var nuke := _focus_or_nearest(owner)
+			var nuke := _picked_foe(owner, args, int(owner.range))
 			if nuke.is_empty() or Fixed.dist(owner.pos, nuke.pos) > int(owner.range):
 				_fail("Sunstrike has no target.")
 				return false
@@ -756,10 +769,37 @@ func _named_angel(args: Dictionary, must_live: bool) -> Dictionary:
 	return hero
 
 
-func _taunt_target() -> Dictionary:
+func _snap_taunt_threat(mob: Dictionary) -> void:
+	var michael := _hero("michael")
+	if michael.is_empty():
+		return
+	if typeof(mob.get("threat", null)) != TYPE_DICTIONARY:
+		mob.threat = {}
+	var top := 0
+	for a in _angels():
+		if int(a.id) == int(michael.id):
+			continue
+		top = maxi(top, int(mob.threat.get(str(a.id), 0)))
+	var mine := int(mob.threat.get(str(michael.id), 0))
+	mob.threat[str(michael.id)] = maxi(mine, top) + Balance.TAUNT_SNAP
+	threat_boost_until = tick + Balance.TAUNT_BOOST_TICKS
+
+
+func _picked_foe(owner: Dictionary, args: Dictionary, max_range: int) -> Dictionary:
+	var picked := _ent(int(args.get("id", 0)))
+	if not picked.is_empty() and bool(picked.get("alive", false)) and str(picked.get("team", "")) == "demon":
+		if Fixed.dist(owner.pos, picked.pos) <= max_range:
+			return picked
+	return _focus_or_nearest(owner)
+
+
+func _taunt_target(args: Dictionary = {}) -> Dictionary:
 	var michael := _hero("michael")
 	if michael.is_empty() or not michael.alive:
 		return {}
+	var picked := _ent(int(args.get("id", 0)))
+	if _tauntable(picked) and Fixed.dist(michael.pos, picked.pos) <= Balance.TAUNT_RADIUS:
+		return picked
 	if focus_id != 0 and focus_until > tick:
 		var focused := _ent(focus_id)
 		if _tauntable(focused) and Fixed.dist(michael.pos, focused.pos) <= Balance.TAUNT_RADIUS:
@@ -914,7 +954,7 @@ func _cmd_trap(args: Dictionary) -> void:
 		"hp_max": 1,
 		"alive": true,
 		"armed": true,
-		"revealed": paid,
+		"revealed": false,
 		"node": node,
 		"room": node.split(":")[0],
 		"avoided": false,
@@ -1348,10 +1388,16 @@ func _movement() -> void:
 			break
 		guard += 1
 	var delta := anchor - before
-	if absi(delta.x) >= absi(delta.y) and delta.x != 0:
+	var ax := absi(delta.x)
+	var ay := absi(delta.y)
+	if ax == 0 and ay == 0:
+		pass
+	elif ay * 2 < ax:
 		facing = Vector2i(Fixed.sign_i(delta.x), 0)
-	elif delta.y != 0:
+	elif ax * 2 < ay:
 		facing = Vector2i(0, Fixed.sign_i(delta.y))
+	else:
+		facing = Vector2i(Fixed.sign_i(delta.x), Fixed.sign_i(delta.y))
 
 
 func _idle_tick() -> void:
@@ -1419,22 +1465,6 @@ func _passives() -> void:
 	if raphael.alive and raphael.casting.is_empty() and raphael.hp < raphael.hp_max:
 		if Balance.RAPHAEL_REGEN_PERIOD > 0 and tick % Balance.RAPHAEL_REGEN_PERIOD == 0:
 			raphael.hp = mini(raphael.hp_max, int(raphael.hp) + Balance.RAPHAEL_REGEN)
-	var azrael := _hero("azrael")
-	if azrael.alive:
-		_reveal_radius(azrael.pos, Balance.DETECT_AURA)
-
-
-func _reveal_traps() -> void:
-	var lead := _lead_angel()
-	if lead.is_empty():
-		return
-	for id in order:
-		var e: Dictionary = entities[id]
-		if str(e.kind) != "trap" or not bool(e.get("armed", false)) or bool(e.get("revealed", false)):
-			continue
-		if Fixed.dist(lead.pos, e.pos) <= 1300:
-			e.revealed = true
-			_log("The lead tile exposes a %s." % e.subtype, "bad")
 
 
 func _maybe_repath() -> void:
@@ -1485,7 +1515,6 @@ func _trigger_traps() -> void:
 
 func _spring_trap(e: Dictionary) -> void:
 	e.armed = false
-	e.revealed = true
 	e.alive = false
 	stats.traps_triggered += 1
 	var room := str(e.room)
@@ -1551,10 +1580,34 @@ func _mob_ai() -> void:
 			m.atk_cd = int(m.atk_cd) - 1
 			if int(m.atk_cd) <= 0:
 				m.atk_cd = int(m.period)
+				m.swing = int(m.get("swing", 0)) + 1
 				if int(tgt.get("untargetable_until", 0)) > tick:
+					if int(m.swing) % Balance.MOB_AOE_EVERY == 0:
+						_mob_pulse(m)
 					continue
 				_hurt(tgt, int(m.atk), "single", m.id, false)
+				if int(m.swing) % Balance.MOB_AOE_EVERY == 0:
+					_mob_pulse(m)
 	_separate_mobs()
+
+
+func _mob_pulse(m: Dictionary) -> void:
+	var dmg := Balance.mob_aoe(str(m.get("subtype", "")))
+	if dmg <= 0:
+		return
+	var room := map.id_at_tile(Fixed.tile_of(m.pos))
+	var hit := 0
+	for a in _angels():
+		if not a.alive:
+			continue
+		var same := room != "" and map.id_at_tile(Fixed.tile_of(a.pos)) == room
+		var near := Fixed.dist(a.pos, m.pos) <= Balance.MOB_AOE_RADIUS
+		if not same and not near:
+			continue
+		_hurt(a, dmg, "aoe", int(m.id), true)
+		hit += 1
+	if hit > 0:
+		_log("%s lashes the party." % m.name, "bad")
 
 
 func _separate_mobs() -> void:
@@ -1710,6 +1763,9 @@ func _curses_land() -> void:
 		elif kind == "mark":
 			tgt.mark_until = tick + Balance.MARK_TICKS
 			_log("%s is marked." % tgt.name, "bad")
+		elif kind == "weaken":
+			tgt.weaken_until = tick + Balance.WEAKEN_TICKS
+			_log("%s is weakened." % tgt.name, "bad")
 
 
 func _lucifer() -> void:
@@ -1904,6 +1960,48 @@ func _stake_label() -> String:
 	return str(map.by_id[id].name)
 
 
+func _shrines() -> void:
+	if phase == "lucifer":
+		channeling_shrine = false
+		shrine_progress = 0
+		return
+	var tile := _shrine_tile(party_room_id)
+	if tile.x < 0 or bool(shrines_done.get(party_room_id, false)):
+		shrine_progress = 0
+		return
+	var on := Fixed.dist(anchor, Fixed.tile_center(tile)) <= Balance.SHRINE_RANGE
+	if not channeling_shrine or not on:
+		if not on:
+			shrine_progress = 0
+		return
+	shrine_progress += 1
+	if shrine_progress < Balance.SHRINE_CHANNEL:
+		return
+	shrine_progress = 0
+	channeling_shrine = false
+	shrines_done[party_room_id] = true
+	_disable_room_traps(party_room_id)
+	_log("The shrine stills the traps.", "good")
+
+
+func _shrine_tile(room: String) -> Vector2i:
+	if room == "":
+		return Vector2i(-1, -1)
+	return map.node_tile("%s:shrine" % room)
+
+
+func _disable_room_traps(room: String) -> void:
+	for id in order.duplicate():
+		var e: Dictionary = entities[id]
+		if str(e.kind) != "trap" or str(e.get("room", "")) != room:
+			continue
+		if not bool(e.get("armed", false)) and not bool(e.get("alive", false)):
+			continue
+		e.armed = false
+		e.alive = false
+		e.disabled = true
+
+
 func _turtle() -> void:
 	if idle_ticks == Balance.TURTLE_WARN_TICKS and not corruption_warned:
 		corruption_warned = true
@@ -2083,11 +2181,11 @@ func _heal(target: Dictionary, amount: int, source_id: int = 0) -> void:
 	var before := int(target.hp)
 	target.hp = mini(int(target.hp_max), int(target.hp) + amount)
 	var gained := int(target.hp) - before
-	if gained < 1:
-		return
-	_popup(target.pos, "+%s" % gained, "good")
+	if gained > 0:
+		_popup(target.pos, "+%s" % gained, "good")
+	# Overheal still generates threat. Passive regen never reaches this path.
 	if source_id != 0:
-		_threat_from_heal(source_id, gained)
+		_threat_from_heal(source_id, amount)
 
 
 func _revive(target: Dictionary, pct: int) -> bool:
@@ -2489,6 +2587,12 @@ func build_snapshot() -> Dictionary:
 		"opening_grace": opening_grace(),
 		"grace_left": grace_left(),
 		"downed_ticks": Balance.DOWNED_TICKS,
+		"threat": _threat_meter(),
+		"shrine_tile": _shrine_tile(party_room_id),
+		"shrine_progress": shrine_progress * 100 / maxi(Balance.SHRINE_CHANNEL, 1),
+		"shrine_done": bool(shrines_done.get(party_room_id, false)),
+		"channeling_shrine": channeling_shrine,
+		"threat_boost": threat_boost_until > tick,
 	}
 
 
@@ -2502,6 +2606,9 @@ func checksum() -> int:
 	h = Fixed.mix(h, stance)
 	h = Fixed.mix(h, focus_id)
 	h = Fixed.mix(h, taunt_id)
+	h = Fixed.mix(h, threat_boost_until)
+	h = Fixed.mix(h, shrine_progress)
+	h = Fixed.mix(h, shrines_done.size())
 	h = Fixed.mix(h, _ally_code())
 	h = Fixed.mix(h, anchor.x)
 	h = Fixed.mix(h, anchor.y)
@@ -2521,6 +2628,7 @@ func checksum() -> int:
 		h = Fixed.mix(h, int(e.get("downed_until", 0)))
 		h = Fixed.mix(h, 1 if bool(e.get("pulled", false)) else 0)
 		h = Fixed.mix(h, _threat_sum(e))
+		h = Fixed.mix(h, int(e.get("swing", 0)))
 	return h
 
 
@@ -2603,6 +2711,7 @@ func _make_mob(subtype: String, name: String, pos: Vector2i, hp: int, atk: int, 
 		"room": room,
 		"home": room,
 		"threat": {},
+		"swing": 0,
 		"pulled": false,
 		"spawn_pos": _clamp_pos(pos),
 	}
@@ -2933,6 +3042,64 @@ func _mob_target(m: Dictionary) -> Dictionary:
 	return _highest_threat(m)
 
 
+func _threat_meter() -> Dictionary:
+	var totals := {}
+	var holds := {}
+	var engaged := 0
+	for subtype in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
+		totals[subtype] = 0
+		holds[subtype] = 0
+	for m in _living_mobs():
+		if str(m.kind) != "mob" or not bool(m.get("pulled", false)):
+			continue
+		engaged += 1
+		var tgt := _mob_target(m)
+		if not tgt.is_empty():
+			var who := str(tgt.get("subtype", ""))
+			if holds.has(who):
+				holds[who] = int(holds[who]) + 1
+		for a in _angels():
+			var sub := str(a.subtype)
+			if not totals.has(sub):
+				continue
+			totals[sub] = int(totals[sub]) + _effective_threat(m, a)
+	var holder := ""
+	var held := 0
+	for subtype in holds.keys():
+		var n := int(holds[subtype])
+		if n > held or (n == held and n > 0 and (holder == "" or str(subtype) < holder)):
+			held = n
+			holder = str(subtype)
+	var top := 0
+	for subtype in totals.keys():
+		top = maxi(top, int(totals[subtype]))
+	var rows: Array = []
+	var pulling := ""
+	var order_names := ["michael", "raphael", "azrael", "uriel", "gabriel"]
+	for subtype in order_names:
+		var threat := int(totals[subtype])
+		var pct := 0 if top <= 0 else threat * 100 / top
+		var aggro: bool = subtype == holder and engaged > 0 and int(holds[subtype]) > 0
+		var soon: bool = engaged > 0 and not aggro and pct >= Balance.THREAT_PULL_PCT and threat > 0
+		if soon and pulling == "":
+			pulling = subtype
+		var hero := _hero(subtype)
+		rows.append({
+			"subtype": subtype,
+			"name": hero.name if not hero.is_empty() else subtype,
+			"threat": threat,
+			"pct": pct,
+			"aggro": aggro,
+			"pulling": soon,
+		})
+	return {
+		"holder": holder if engaged > 0 else "",
+		"pulling": pulling,
+		"engaged": engaged,
+		"rows": rows,
+	}
+
+
 func threat_of(mob_id: int, angel_id: int) -> int:
 	var mob := _ent(mob_id)
 	var angel := _ent(angel_id)
@@ -3036,6 +3203,8 @@ func _note_damage_threat(target: Dictionary, source_id: int, dealt: int) -> void
 	var amount := dealt
 	if str(src.get("subtype", "")) == "michael":
 		amount = dealt * Balance.TANK_THREAT_MULT / 100
+		if tick < threat_boost_until:
+			amount = amount * (100 + Balance.TAUNT_BOOST_PCT) / 100
 	_add_threat(target, source_id, amount)
 
 
