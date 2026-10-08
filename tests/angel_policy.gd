@@ -10,12 +10,19 @@ var plan := [
 	"throne",
 ]
 var pulsed := {}
+# Knobs for a slower human policy. Defaults match the scripted competent run.
+var act_every := 5
+var react_remain := 40
+var heal_below := 80
+var burst_at := 6000
+var burst_loose := true
+var pre_shield := true
 
 
 func act(sim) -> void:
 	if sim.outcome != "":
 		return
-	if sim.tick % 5 != 0:
+	if sim.tick % act_every != 0:
 		return
 	_stance(sim)
 	_defense(sim)
@@ -46,24 +53,25 @@ func _defense(sim) -> void:
 	if not tg.is_empty():
 		var name := str(tg.get("name", ""))
 		var remain: int = int(tg.get("until", 0)) - int(sim.tick)
-		if name == "hell_rain" and remain <= 40:
+		if name == "hell_rain" and remain <= react_remain:
 			sim.submit("scatter", {})
-		elif name == "cleave" and remain <= 40:
+		elif name == "cleave" and remain <= react_remain:
 			sim.submit("scatter", {})
-			sim.submit("ability", {"name": "shield_wall"})
-		elif name == "grasp" and remain <= 40:
+			if pre_shield:
+				sim.submit("ability", {"name": "shield_wall"})
+		elif name == "grasp" and remain <= react_remain:
 			sim.submit("phalanx", {})
 		if name == "judgment":
 			sim.submit("ability", {"name": "body_block"})
 			sim.submit("shield", {})
-			if remain <= 30:
+			if remain <= react_remain - 10:
 				sim.submit("phalanx", {})
-		elif name in ["cleave", "grasp"]:
+		elif pre_shield and name in ["cleave", "grasp"]:
 			sim.submit("shield", {})
 	for commit in sim._visible_commitments():
 		var plan := str(commit.get("plan", ""))
 		var remain: int = int(commit.get("land", 0)) - int(sim.tick)
-		if plan == "elite" and remain <= 70:
+		if plan == "elite" and remain <= react_remain + 30:
 			sim.submit("ability", {"name": "taunt"})
 			sim.submit("phalanx", {})
 		elif plan == "trap_cluster":
@@ -74,7 +82,7 @@ func _defense(sim) -> void:
 		sim.submit("phalanx", {})
 	if _debuffed(sim):
 		sim.submit("cleanse", {})
-	if sim.lowest_angel_hp_pct() < 80 or sim._downed_count() > 0:
+	if sim.lowest_angel_hp_pct() < heal_below or sim._downed_count() > 0:
 		sim.submit("heal", {})
 	var raphael: Dictionary = sim._hero("raphael")
 	if sim._downed_count() > 0 and not raphael.is_empty() and raphael.alive and sim.golden >= 6000:
@@ -100,7 +108,7 @@ func _offense(sim) -> void:
 	# While someone is still in the downed window, keep enough Golden for a slow revive.
 	if sim._downed_count() > 0 and sim.golden < 6000 + Balance.cost("burst"):
 		return
-	if sim.golden >= 6000 or (sim.golden >= 4000 and sim.lowest_angel_hp_pct() > 75):
+	if sim.golden >= burst_at or (burst_loose and sim.golden >= 4000 and sim.lowest_angel_hp_pct() > 75):
 		sim.submit("burst", {})
 
 

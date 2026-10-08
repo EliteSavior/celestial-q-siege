@@ -8,6 +8,7 @@ func run_all() -> int:
 	var tests := [
 		"test_map_connects",
 		"test_elixir_compounds_by_stage",
+		"test_opening_bank_funds_the_first_decision",
 		"test_tiers_follow_rooms_cleared",
 		"test_seal_blocks_swarms_and_font_eats_curse",
 		"test_fixed_math",
@@ -58,6 +59,12 @@ func run_all() -> int:
 		"test_command_bar_routes_every_button",
 		"test_elixir_spend_cap_and_interaction_income",
 		"test_scene_touch_playable",
+		"test_threat_tells_are_distinct",
+		"test_win_lose_restart_loop",
+		"test_coach_hints_name_the_loop",
+		"test_juice_stays_out_of_the_sim",
+		"test_human_policy_can_win",
+		"test_walking_past_the_kit_loses",
 	]
 	for name in tests:
 		call(name)
@@ -82,6 +89,15 @@ func test_map_connects() -> void:
 	print("  throne path ", tiles, " tiles")
 	if not errors.is_empty():
 		fail("map: %s" % str(errors))
+
+
+func test_opening_bank_funds_the_first_decision() -> void:
+	var sim := CombatSim.new()
+	var need := Balance.cost("shield_wall") + Balance.cost("single_heal")
+	if sim.golden < need + 500:
+		fail("opening golden %d does not cover shield and a heal with a cushion" % sim.golden)
+	if sim.golden - need >= Balance.cost("burst"):
+		fail("opening cushion %d funds another full cast" % (sim.golden - need))
 
 
 func test_elixir_compounds_by_stage() -> void:
@@ -2347,6 +2363,376 @@ func test_scene_touch_playable() -> void:
 	if str(game.hud._portraits.michael.text).contains("DOWN"):
 		fail("michael portrait showed the wrong angel down")
 	game.queue_free()
+
+
+func test_threat_tells_are_distinct() -> void:
+	var board = load("res://game/board_view.gd")
+	var colors: Dictionary = board.TELL_COLOR
+	var labels: Dictionary = board.TELL_LABEL
+	var groups := [
+		["silence", "rot", "mark"],
+		["spike", "snare", "hellflame"],
+		["hell_rain", "cleave", "judgment", "grasp"],
+		["commit", "echo", "transform"],
+	]
+	for group in groups:
+		var seen := {}
+		for name in group:
+			if not colors.has(name):
+				fail("missing tell color %s" % name)
+				return
+			var c: Color = colors[name]
+			var key := "%d,%d,%d" % [int(c.r * 20.0), int(c.g * 20.0), int(c.b * 20.0)]
+			if seen.has(key):
+				fail("%s shares a color with another tell in %s" % [name, str(group)])
+				return
+			seen[key] = true
+			if str(labels.get(name, "")) == "":
+				fail("missing tell label %s" % name)
+				return
+	var hints: Dictionary = board.HINT_COLOR
+	for hint in ["Still air", "Skittering", "Whispers"]:
+		if not hints.has(hint):
+			fail("door hint %s has no color" % hint)
+			return
+
+
+func test_win_lose_restart_loop() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.hud._layout_bottom()
+	game.sim.director_enabled = false
+	if not game.briefing or not game.hud._brief.visible:
+		fail("start screen was not up")
+		game.queue_free()
+		return
+	var held := game.sim.tick
+	game._process(1.0)
+	if game.sim.tick != held:
+		fail("start screen advanced the clock")
+		game.queue_free()
+		return
+	var queued := game.sim.queue.size()
+	var touch := InputEventScreenTouch.new()
+	touch.pressed = true
+	touch.index = 0
+	touch.position = Vector2(640, 360)
+	game._unhandled_input(touch)
+	if game.sim.queue.size() != queued:
+		fail("start screen accepted a march")
+		game.queue_free()
+		return
+	var begin: Button = game.hud._begin
+	var begin_r := begin.get_rect()
+	if begin_r.size.x < 64.0 or begin_r.size.y < 64.0 or begin_r.position.y + begin_r.size.y > 720.0:
+		fail("begin target %s" % begin_r)
+		game.queue_free()
+		return
+	begin.pressed.emit()
+	if game.briefing:
+		fail("begin did not start")
+		game.queue_free()
+		return
+	game._process(0.2)
+	if game.sim.tick <= 0:
+		fail("the run never ticked")
+		game.queue_free()
+		return
+	for angel in game.sim._angels():
+		game.sim._hurt(angel, 99999, "single", 0, false)
+	for _i in 80:
+		if game.sim.outcome != "":
+			break
+		game.sim.tick_once()
+	game._process(0.0)
+	if game.sim.outcome != "demon":
+		fail("wipe was not a defeat: %s" % game.sim.debug_string())
+		game.queue_free()
+		return
+	if not game.hud._end.visible or not game.hud._defeat_mark.visible or game.hud._victory_mark.visible:
+		fail("defeat screen did not replace the board")
+		game.queue_free()
+		return
+	if str(game.hud._defeat_mark.text) != "DEFEAT" or str(game.hud._again.text) != "Try again":
+		fail("defeat copy %s / %s" % [game.hud._defeat_mark.text, game.hud._again.text])
+		game.queue_free()
+		return
+	if not str(game.hud._end_label.text).contains("extinguished"):
+		fail("defeat body %s" % game.hud._end_label.text)
+		game.queue_free()
+		return
+	var defeat_color: Color = game.hud._end.color
+	var again_r: Rect2 = game.hud._again.get_rect()
+	if again_r.size.x < 64.0 or again_r.size.y < 64.0 or again_r.position.y + again_r.size.y > 720.0:
+		fail("try-again target %s" % again_r)
+		game.queue_free()
+		return
+	var q_end := game.sim.queue.size()
+	game.command("shield")
+	if game.sim.queue.size() != q_end:
+		fail("defeat still accepted commands")
+		game.queue_free()
+		return
+	game.hud._again.pressed.emit()
+	if game.briefing or game.sim.outcome != "" or game.sim.tick != 0:
+		fail("restart did not open a fresh run: %s" % game.sim.debug_string())
+		game.queue_free()
+		return
+	game.sim.director_enabled = false
+	game.sim.golden = 8000
+	game.command("shield")
+	game.sim.tick_once()
+	game._process(0.0)
+	if game.sim.shield_wall_until <= game.sim.tick:
+		fail("restarted run ignored shield")
+		game.queue_free()
+		return
+	var fill := game.hud._bar.shield.get_node_or_null("CdFill") as ColorRect
+	if fill == null or not fill.visible:
+		fail("cooldown fill did not show after shield")
+		game.queue_free()
+		return
+	game.sim.dark = 8000
+	game.sim.submit("descend", {"early": false}, "demon", 1)
+	game.sim.tick_once()
+	var boss: Dictionary = game.sim._boss()
+	if boss.is_empty():
+		fail("descend did not bring lucifer")
+		game.queue_free()
+		return
+	boss.hp = 1
+	game.sim._hurt(boss, 50, "single", 1, false)
+	game.sim.tick_once()
+	game._process(0.0)
+	if game.sim.outcome != "angels":
+		fail("killing lucifer was not a win")
+		game.queue_free()
+		return
+	if not game.hud._victory_mark.visible or game.hud._defeat_mark.visible:
+		fail("victory screen missing")
+		game.queue_free()
+		return
+	if str(game.hud._victory_mark.text) != "VICTORY" or str(game.hud._again.text) != "Siege again":
+		fail("victory copy %s / %s" % [game.hud._victory_mark.text, game.hud._again.text])
+		game.queue_free()
+		return
+	if game.hud._end.color == defeat_color:
+		fail("victory and defeat share a panel")
+		game.queue_free()
+		return
+	var title_r: Rect2 = game.hud._to_title.get_rect()
+	if title_r.size.y < 48.0 or title_r.position.y + title_r.size.y > 720.0:
+		fail("title button %s" % title_r)
+		game.queue_free()
+		return
+	game.hud._to_title.pressed.emit()
+	if not game.briefing or not game.hud._brief.visible or game.sim.tick != 0 or game.sim.outcome != "":
+		fail("title did not return to the start screen")
+		game.queue_free()
+		return
+	game._process(0.5)
+	if game.sim.tick != 0:
+		fail("title screen ticked")
+		game.queue_free()
+		return
+	game.hud.size = Vector2(1280, 800)
+	game.hud._layout_bottom()
+	var shield: Button = game.hud._bar.shield
+	var shield_r := shield.get_rect()
+	if shield_r.size.x < 64.0 or shield_r.size.y < 64.0:
+		fail("shield target on a tall screen %s" % shield_r)
+		game.queue_free()
+		return
+	if shield_r.position.y < 640.0 or shield_r.position.y + shield_r.size.y > 800.0:
+		fail("command bar left the bottom of an 800-tall screen %s" % shield_r)
+		game.queue_free()
+		return
+	game.queue_free()
+
+
+func test_coach_hints_name_the_loop() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.sim.director_enabled = false
+	game._process(0.0)
+	var line := str(game.hud._coach.text)
+	if not line.contains("squad") and not line.contains("Tap"):
+		fail("opening hint was %s" % line)
+		game.queue_free()
+		return
+	var tile: Vector2i = game.sim.map.center_tile("fork")
+	game.sim.anchor = Fixed.tile_center(tile)
+	for angel in game.sim._angels():
+		angel.pos = game.sim.anchor
+	game.sim.path = []
+	game.sim.tick_once()
+	game._process(0.0)
+	line = str(game.hud._coach.text)
+	if not line.contains("Still air") or not line.contains("3"):
+		fail("fork hint was %s" % line)
+		game.queue_free()
+		return
+	game.sim.dark = 9000
+	game.sim.submit("curse", {"kind": "rot", "target": "raphael"}, "demon", 1)
+	game.sim.tick_once()
+	game._process(0.0)
+	game.board.notification(CanvasItem.NOTIFICATION_DRAW)
+	line = str(game.hud._coach.text)
+	if not line.contains("Rot") or not line.contains("Cleanse"):
+		fail("curse hint was %s" % line)
+		game.queue_free()
+		return
+	for _i in 90:
+		game.sim.tick_once()
+	game.sim.dark = 8000
+	game.sim.submit("descend", {"early": false}, "demon", 1)
+	game.sim.tick_once()
+	game._process(0.0)
+	line = str(game.hud._coach.text)
+	if not line.contains("Lucifer"):
+		fail("rise hint was %s" % line)
+		game.queue_free()
+		return
+	while game.sim.tick < game.sim.transform_until:
+		game.sim.tick_once()
+	game.sim.submit("boss", {"button": "hell_rain"}, "demon", 1)
+	game.sim.tick_once()
+	game._process(0.0)
+	game.board.notification(CanvasItem.NOTIFICATION_DRAW)
+	line = str(game.hud._coach.text)
+	if not line.contains("Hell rain") or not line.contains("Scatter"):
+		fail("hell rain hint was %s" % line)
+		game.queue_free()
+		return
+	game.hud._hide.pressed.emit()
+	game._process(0.0)
+	if game.hud._coach.visible:
+		fail("hints stayed up after hide")
+	game.queue_free()
+
+
+func test_juice_stays_out_of_the_sim() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var bare := CombatSim.new()
+	bare.director_enabled = false
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	host.root.add_child(game)
+	_pin_screen(game)
+	game.briefing = false
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	bare.submit("stance", {"stance": CombatSim.STANCE_SPREAD})
+	game.sim.submit("stance", {"stance": CombatSim.STANCE_SPREAD})
+	bare.tick_once()
+	game.sim.tick_once()
+	bare._hurt(bare._hero("gabriel"), 30, "single", 0, false)
+	game.sim._hurt(game.sim._hero("gabriel"), 30, "single", 0, false)
+	game.juice.follow(game.sim.build_snapshot())
+	game.juice._process(0.05)
+	if game.sim.checksum() != bare.checksum():
+		fail("view juice diverged the sim")
+		game.queue_free()
+		return
+	if game.juice.sfx == null or game.juice.sfx._clips.is_empty():
+		fail("sfx clips were not built")
+		game.queue_free()
+		return
+	if game.juice.sfx.played.find("hit") < 0:
+		fail("a hit did not hook a sound %s" % str(game.juice.sfx.played))
+		game.queue_free()
+		return
+	var q := game.sim.queue.size()
+	game.juice.follow(game.sim.build_snapshot())
+	if game.sim.queue.size() != q:
+		fail("juice submitted a command")
+		game.queue_free()
+		return
+	game.hud._bar.heal.pressed.emit()
+	if game.juice.sfx.played.find("ui") < 0:
+		fail("a button press did not hook ui")
+		game.queue_free()
+		return
+	if game.sim.checksum() != bare.checksum():
+		fail("the ui hook wrote into the sim before the command was ticked")
+	game.queue_free()
+
+
+func test_human_policy_can_win() -> void:
+	var run: Dictionary = _drive(preload("res://tests/human_policy.gd").new(), 20 * 60 * 16)
+	var sim = run.sim
+	var lucifer_tick := int(run.lucifer)
+	var total_s := float(sim.tick) / 20.0
+	var crawl_s := float(lucifer_tick) / 20.0 if lucifer_tick >= 0 else -1.0
+	var boss_s := total_s - crawl_s if lucifer_tick >= 0 else -1.0
+	print("  human crawl=%0.1fs boss=%0.1fs total=%0.1fs outcome=%s seal=%s font=%s altar=%s" % [
+		crawl_s, boss_s, total_s, sim.outcome, sim.seal_done, sim.font_done, sim.altar_done
+	])
+	if sim.outcome != "angels":
+		fail("a slower player did not win: %s" % sim.debug_string())
+		print(_feed(sim))
+		return
+	if not sim.seal_done or not sim.font_done or not sim.altar_done:
+		fail("human skipped a stake seal=%s font=%s altar=%s" % [sim.seal_done, sim.font_done, sim.altar_done])
+	if total_s < 8.0 * 60.0 or total_s > 14.0 * 60.0:
+		fail("human run %0.1fs is outside 8–14 min" % total_s)
+	if boss_s < 60.0 or boss_s > 180.0:
+		fail("human boss %0.1fs is not a climax" % boss_s)
+
+
+func test_walking_past_the_kit_loses() -> void:
+	var run: Dictionary = _drive(preload("res://tests/passive_policy.gd").new(), 20 * 60 * 16)
+	var sim = run.sim
+	var total_s := float(sim.tick) / 20.0
+	print("  passive total=%0.1fs outcome=%s room=%s altar=%s" % [total_s, sim.outcome, sim.party_room_id, sim.altar_done])
+	if sim.outcome == "angels":
+		fail("marching without the kit still won")
+		return
+	if sim.outcome != "demon":
+		fail("passive run soft-locked: %s" % sim.debug_string())
+		return
+	if sim.altar_done:
+		fail("passive run banked the altar")
+
+
+func _drive(policy, limit: int) -> Dictionary:
+	var sim := CombatSim.new()
+	var lucifer_tick := -1
+	for _i in limit:
+		if sim.outcome != "":
+			break
+		policy.act(sim)
+		sim.tick_once()
+		if sim.phase == "lucifer" and lucifer_tick < 0:
+			lucifer_tick = sim.tick
+			print("  arrived ", sim.debug_string())
+	return {"sim": sim, "lucifer": lucifer_tick}
 
 
 func _pin_screen(node: Control) -> void:
