@@ -110,6 +110,14 @@ func run_all() -> int:
 		"test_single_heal_targets_the_chosen_hero",
 		"test_mobs_hold_until_aggro",
 		"test_new_acts_are_touchable",
+		"test_tank_holds_under_autos",
+		"test_overheal_can_pull",
+		"test_mob_pulse_hits_the_party",
+		"test_director_casts_weaken",
+		"test_shrine_disables_room_traps",
+		"test_threat_meter_names_the_holder",
+		"test_diagonal_path_cuts_the_corner",
+		"test_elixir_abilities_have_no_cooldown",
 	]
 	ran = tests.size()
 	for name in tests:
@@ -178,9 +186,9 @@ func test_elixir_bar_is_zero_to_one_hundred() -> void:
 	if sim.dark < 0 or sim.dark > Balance.ELIXIR_MAX:
 		fail("opening dark %d outside 0–100" % sim.dark)
 		return
-	# Dark keeps 1.0.3 purchasing power on the shared meter.
-	if Balance.points_of(Balance.DARK_START) != 42:
-		fail("dark start rescaled to %d" % Balance.points_of(Balance.DARK_START))
+	# v1.1.0 opens Dread full so the director can summon immediately.
+	if Balance.points_of(Balance.DARK_START) != 100:
+		fail("dark start is %d, want a full bar" % Balance.points_of(Balance.DARK_START))
 		return
 	if Balance.points_of(Balance.summon_cost("swarm")) != 16:
 		fail("swarm cost rescaled")
@@ -515,8 +523,14 @@ func test_traps_hidden_until_detect() -> void:
 	for a2 in sim._angels():
 		a2.pos = sim.anchor
 	sim.tick_once()
+	if not sim.build_snapshot().traps.is_empty():
+		fail("standing near a trap rendered it")
+		return
+	sim.golden = 8000
+	sim.submit("ability", {"name": "detect_pulse"})
+	sim.tick_once()
 	if sim.build_snapshot().traps.is_empty():
-		fail("Azrael aura did not reveal the spike")
+		fail("Detect did not reveal the spike")
 
 
 func test_column_spike_hits_lead_only() -> void:
@@ -1238,8 +1252,23 @@ func test_commitment_telegraphs_before_it_lands() -> void:
 	if armed != 2:
 		fail("cluster armed %d traps" % armed)
 		return
-	if revealed != 2:
-		fail("witnessed cluster stayed hidden (%d revealed)" % revealed)
+	if revealed != 0:
+		fail("cluster rendered without Detect (%d revealed)" % revealed)
+		return
+	sim.golden = 8000
+	var hidden_trap := {}
+	for id_h in sim.order:
+		var eh: Dictionary = sim.entities[id_h]
+		if str(eh.kind) == "trap" and bool(eh.get("armed", false)):
+			hidden_trap = eh
+			break
+	# Stand inside the pulse and outside the spring, or the reveal tick
+	# consumes the trap and the room is no longer at its cap.
+	sim._hero("azrael").pos = hidden_trap.pos + Vector2i(800, 0)
+	sim.submit("ability", {"name": "detect_pulse"})
+	sim.tick_once()
+	if not bool(hidden_trap.get("revealed", false)):
+		fail("Detect did not reveal the committed trap")
 		return
 	sim.dark = 5000
 	sim.submit("trap", {"kind": "snare", "node": "cursed:rear"}, "demon", 1)
@@ -1668,8 +1697,10 @@ func test_michael_kit() -> void:
 		fail("taunted elite is not stuck to Michael")
 	elite.pos = dive._hero("raphael").pos + Vector2i(150, 0)
 	dive.taunt_until = dive.tick
-	if int(dive._mob_target(elite).id) == int(dive._hero("michael").id):
-		fail("taunt did not expire")
+	if dive.threat_boost_until <= dive.tick:
+		fail("taunt boost ended with the force window")
+	if str(dive._mob_target(elite).subtype) != "michael":
+		fail("stored taunt threat dropped Michael")
 
 
 func test_raphael_kit() -> void:
@@ -1768,10 +1799,8 @@ func test_azrael_kit() -> void:
 	var edge := _plant(sim, azrael.pos + Vector2i(Balance.DETECT_AURA, 0))
 	var outside := _plant(sim, azrael.pos + Vector2i(Balance.DETECT_AURA + 1, 0))
 	sim.tick_once()
-	if not bool(edge.revealed):
-		fail("detect aura missed the rim")
-	if bool(outside.revealed):
-		fail("detect aura reached past its radius")
+	if bool(edge.revealed) or bool(outside.revealed):
+		fail("a trap rendered without Detect")
 	var way := _plant(sim, azrael.pos + Vector2i(Balance.DETECT_PULSE + 80, 0))
 	_pay(sim, "detect_pulse")
 	if not bool(outside.revealed):
@@ -2136,8 +2165,8 @@ func _assert_priced(owner: String, ability: String) -> void:
 		fail("%s owner is %s" % [ability, Balance.owner_of(ability)])
 	if Balance.cost(ability) <= 0:
 		fail("%s has no cost" % ability)
-	if Balance.cooldown(ability) <= 0:
-		fail("%s has no cooldown" % ability)
+	if Balance.cooldown(ability) > 0:
+		fail("%s still has a cooldown" % ability)
 
 
 func _pay(sim: CombatSim, ability: String) -> void:
@@ -2154,7 +2183,7 @@ func _pay(sim: CombatSim, ability: String) -> void:
 	var expect := before - Balance.cost(ability) + bounty + Balance.golden_regen(sim.stage_reached)
 	if sim.golden != expect:
 		fail("%s golden %d want %d (%s)" % [ability, sim.golden, expect, _feed(sim)])
-	if int(hero.cooldowns.get(ability, 0)) <= sim.tick:
+	if Balance.cooldown(ability) > 0 and int(hero.cooldowns.get(ability, 0)) <= sim.tick:
 		fail("%s did not start a cooldown" % ability)
 
 
@@ -2162,6 +2191,10 @@ func _pay_blocked(sim: CombatSim, ability: String) -> void:
 	var before := sim.golden
 	sim.submit("ability", {"name": ability})
 	sim.tick_once()
+	if Balance.cooldown(ability) <= 0:
+		if _feed(sim).contains("not ready"):
+			fail("%s was cooling after cooldowns were removed" % ability)
+		return
 	var expect := before + Balance.golden_regen(sim.stage_reached)
 	if sim.golden != expect:
 		fail("%s ignored its cooldown (%d -> %d)" % [ability, before, sim.golden])
@@ -2834,8 +2867,8 @@ func test_win_lose_restart_loop() -> void:
 		game.queue_free()
 		return
 	var fill := game.hud._bar.shield.get_node_or_null("CdFill") as ColorRect
-	if fill == null or not fill.visible:
-		fail("cooldown fill did not show after shield")
+	if fill != null and fill.visible:
+		fail("shield drew a cooldown veil; elixir is the only gate")
 		game.queue_free()
 		return
 	game.sim.dark = 8000
@@ -3413,8 +3446,11 @@ func test_opening_grace_before_the_player_acts() -> void:
 	if fast.opening_grace():
 		fail("grace stuck after the player moved")
 		return
-	if fast.dark != before + Balance.dark_regen(0):
-		fail("acted run dark %d want %d" % [fast.dark, before + Balance.dark_regen(0)])
+	var want := before + Balance.dark_regen(0)
+	if before >= Balance.ELIXIR_MAX:
+		want = Balance.ELIXIR_MAX
+	if fast.dark != want:
+		fail("acted run dark %d want %d" % [fast.dark, want])
 
 
 func _mount_main() -> Array:
@@ -3475,7 +3511,8 @@ func test_iso_screen_tile_roundtrip() -> void:
 	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	game._process(0.0)
 	game.board._process(0.0)
-	var tile := Vector2i(8, 46)
+	# South of the squad. The room center is the anchor, so a tap there hits Raphael.
+	var tile := Vector2i(24, 50)
 	var milli := Fixed.tile_center(tile)
 	var screen: Vector2 = game.board._milli_screen(milli)
 	if not game.board.playfield_rect().has_point(screen):
@@ -3522,7 +3559,7 @@ func test_iso_screen_tile_roundtrip() -> void:
 		fail("round trip screen %s vs %s" % [again, known])
 		game.queue_free()
 		return
-	var outside := Vector2i(0, 46)
+	var outside := Vector2i(16, 48)
 	var out_milli := Fixed.tile_center(outside)
 	var out_iso: Vector2 = BoardView.iso_of_tile(float(out_milli.x) / 1000.0, float(out_milli.y) / 1000.0)
 	game.board.zoom = 1.0
@@ -3660,12 +3697,22 @@ func test_taunt_snaps_threat() -> void:
 	if snapped <= az_t:
 		fail("snap %d did not clear %d" % [snapped, az_t])
 		return
-	if int(mob.threat.get(str(michael.id), 0)) != 10:
-		fail("snap was written into the table %s" % str(mob.threat))
+	if int(mob.threat.get(str(michael.id), 0)) <= 10:
+		fail("snap was not stored %s" % str(mob.threat))
+		return
+	if sim.threat_boost_until <= sim.tick + Balance.TAUNT_TICKS:
+		fail("threat boost is only the taunt window")
 		return
 	sim.taunt_until = sim.tick
-	if str(sim._mob_target(mob).subtype) != "azrael":
-		fail("base threat did not resume when taunt ended")
+	if str(sim._mob_target(mob).subtype) != "michael":
+		fail("stored snap dropped when the force window ended")
+		return
+	var before := int(mob.threat.get(str(michael.id), 0))
+	sim._hurt(mob, 10, "single", int(michael.id), false)
+	var gained := int(mob.threat.get(str(michael.id), 0)) - before
+	var boosted := 10 * Balance.TANK_THREAT_MULT / 100 * (100 + Balance.TAUNT_BOOST_PCT) / 100
+	if gained != boosted:
+		fail("boosted threat %d want %d" % [gained, boosted])
 
 
 func test_dps_elixir_attacks() -> void:
@@ -3862,25 +3909,30 @@ func test_new_acts_are_touchable() -> void:
 	game.sim.golden = 9000
 	var queued := game.sim.queue.size()
 	game.hud._acts.strike.pressed.emit()
-	if game.sim.queue.size() <= queued or str(game.sim.queue.back().type) != "ability":
-		fail("strike tap did not submit")
+	if game.sim.queue.size() != queued:
+		fail("strike armed by casting immediately")
 		game.queue_free()
 		return
-	if str(game.sim.queue.back().args.get("name", "")) != "strike":
-		fail("strike tap submitted %s" % str(game.sim.queue.back()))
+	if game.armed != "strike":
+		fail("strike tap did not arm")
 		game.queue_free()
 		return
+	game.cast_armed({"id": int(mob.id)})
 	game.sim.tick_once()
 	if int(mob.hp) == 500:
-		fail("strike tap did no damage")
+		fail("armed strike did no damage")
 		game.queue_free()
 		return
 	game.sim.golden = 9000
-	game.sim._hero("michael").cooldowns.erase("taunt")
 	game.hud._acts.taunt.pressed.emit()
+	if game.armed != "taunt":
+		fail("taunt tap did not arm")
+		game.queue_free()
+		return
+	game.cast_armed({"id": int(mob.id)})
 	game.sim.tick_once()
 	if game.sim.taunt_until <= game.sim.tick:
-		fail("taunt tap did not force a target")
+		fail("armed taunt did not force a target")
 	game.queue_free()
 
 
@@ -4097,3 +4149,203 @@ func _feed(sim) -> String:
 	for row in sim.feed:
 		s += str(row.text) + " | "
 	return s
+
+
+func test_tank_holds_under_autos() -> void:
+	var sim := _lab()
+	var michael := sim._hero("michael")
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(700, 0), 5000)
+	mob.pulled = true
+	mob.active_at = 0
+	mob.atk_cd = 99999
+	var held := 0
+	for _i in 80:
+		sim.tick_once()
+		if str(sim._mob_target(mob).subtype) == "michael":
+			held += 1
+	if held < 60:
+		fail("Michael held aggro on %d of 80 ticks" % held)
+		return
+	var meter: Dictionary = sim.build_snapshot().threat
+	if str(meter.get("holder", "")) != "michael":
+		fail("meter holder %s" % str(meter.get("holder", "")))
+
+
+func test_overheal_can_pull() -> void:
+	var sim := _lab()
+	for a in sim._angels():
+		a.atk_cd = 9999
+	var michael := sim._hero("michael")
+	var raphael := sim._hero("raphael")
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(200, 0), 900)
+	mob.pulled = true
+	sim._hurt(mob, 8, "single", int(michael.id), false)
+	var lead := int(mob.threat.get(str(michael.id), 0))
+	if str(sim._mob_target(mob).subtype) != "michael":
+		fail("tank did not open with aggro")
+		return
+	raphael.hp = int(raphael.hp_max)
+	var casts := 0
+	while str(sim._mob_target(mob).subtype) == "michael" and casts < 40:
+		sim._heal(raphael, Balance.HEAL_PARTY, int(raphael.id))
+		casts += 1
+	if str(sim._mob_target(mob).subtype) != "raphael":
+		fail("overheal did not pull (lead %d casts %d threat %s)" % [lead, casts, str(mob.threat)])
+		return
+	if int(mob.threat.get(str(raphael.id), 0)) <= lead:
+		fail("overheal threat did not pass the tank")
+
+
+func test_mob_pulse_hits_the_party() -> void:
+	var sim := _lab()
+	for a in sim._angels():
+		a.atk_cd = 9999
+		a.pos = sim._hero("michael").pos
+	var michael := sim._hero("michael")
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(400, 0), 900)
+	mob.pulled = true
+	mob.active_at = 0
+	mob.atk_cd = 1
+	mob.swing = Balance.MOB_AOE_EVERY - 1
+	var before := {}
+	for a in sim._angels():
+		before[str(a.subtype)] = int(a.hp)
+	sim.tick_once()
+	var hit := 0
+	for a2 in sim._angels():
+		if int(a2.hp) < int(before[str(a2.subtype)]):
+			hit += 1
+	if hit < 5:
+		fail("pulse hit %d of 5" % hit)
+
+
+func test_director_casts_weaken() -> void:
+	var sim := CombatSim.new()
+	_stand_corridor(sim, "m1a_0")
+	sim.stage_reached = 1
+	sim.rooms_cleared = 3
+	sim.seal_done = true
+	sim.font_done = true
+	sim.altar_done = true
+	sim.dark = 10000
+	# Spawn and trap counts sit above the curse count, so the next spend
+	# is the curse the director owes: every fourth curse leads with Weaken.
+	sim.spawns_placed = 8
+	sim.traps_placed = 8
+	sim.curses_cast = 3
+	sim.director.fortified = {"seal": true, "font": true, "altar": true}
+	_ready_director(sim)
+	var saw := false
+	for _i in 80:
+		sim.tick_once()
+		if int(sim._hero("azrael").get("weaken_until", 0)) > sim.tick or int(sim._hero("uriel").get("weaken_until", 0)) > sim.tick:
+			saw = true
+			break
+		for id in sim.order:
+			var e: Dictionary = sim.entities[id]
+			if str(e.kind) == "curse" and str(e.subtype) == "weaken":
+				saw = true
+				break
+		if saw:
+			break
+	if not saw:
+		fail("director never cast weaken (%s)" % sim.debug_string())
+
+
+func test_shrine_disables_room_traps() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 8000
+	sim.submit("trap", {"kind": "spike", "node": "trapped:choke"}, "demon", 1)
+	sim.submit("trap", {"kind": "snare", "node": "trapped:flank"}, "demon", 1)
+	sim.tick_once()
+	var shrine: Vector2i = sim.map.node_tile("trapped:shrine")
+	if shrine.x < 0:
+		fail("trapped room has no shrine")
+		return
+	if not sim.build_snapshot().traps.is_empty():
+		fail("traps rendered before Detect")
+		return
+	sim.anchor = Fixed.tile_center(shrine)
+	sim.party_room_id = "trapped"
+	for a in sim._angels():
+		a.pos = sim.anchor
+	sim.submit("channel_shrine")
+	for _i in Balance.SHRINE_CHANNEL:
+		sim.tick_once()
+	if not bool(sim.shrines_done.get("trapped", false)):
+		fail("shrine did not finish (progress %d)" % sim.shrine_progress)
+		return
+	if sim.traps_in_room("trapped") != 0:
+		fail("shrine left %d armed traps" % sim.traps_in_room("trapped"))
+		return
+	if not sim.build_snapshot().traps.is_empty():
+		fail("disabled traps still rendered")
+
+
+func test_threat_meter_names_the_holder() -> void:
+	var sim := _lab()
+	for a in sim._angels():
+		a.atk_cd = 9999
+	var michael := sim._hero("michael")
+	var az := sim._hero("azrael")
+	var mob := _mob(sim, "heavy", michael.pos + Vector2i(200, 0), 900)
+	mob.pulled = true
+	sim._hurt(mob, 40, "single", int(michael.id), false)
+	var meter: Dictionary = sim.build_snapshot().threat
+	if str(meter.get("holder", "")) != "michael":
+		fail("holder %s" % str(meter.holder))
+		return
+	var pulling := false
+	sim._hurt(mob, 260, "single", int(az.id), false)
+	meter = sim.build_snapshot().threat
+	for row in meter.rows:
+		if str(row.subtype) == "azrael" and (bool(row.aggro) or bool(row.pulling)):
+			pulling = true
+	if str(meter.get("holder", "")) == "michael" and not pulling and str(meter.get("pulling", "")) == "":
+		fail("meter did not show Azrael taking or threatening aggro %s" % str(meter))
+
+
+func test_diagonal_path_cuts_the_corner() -> void:
+	var map := DungeonMap.new()
+	var start := Vector2i(4, 4)
+	var goal := Vector2i(8, 8)
+	for y in range(2, 12):
+		for x in range(2, 12):
+			map.walk[y * map.width + x] = 1
+	var path: Array = Pathing.find(map.walk, map.width, map.height, start, goal, {})
+	if path.is_empty():
+		fail("diagonal path missing")
+		return
+	if path.size() > 6:
+		fail("path stayed orthogonal, length %d" % path.size())
+		return
+	var blocked := map.walk.duplicate()
+	blocked[4 * map.width + 5] = 0
+	blocked[5 * map.width + 4] = 0
+	var cut: Array = Pathing.find(blocked, map.width, map.height, start, Vector2i(5, 5), {})
+	if cut.size() == 2:
+		fail("path cut a closed corner")
+
+
+func test_elixir_abilities_have_no_cooldown() -> void:
+	for ability in ["taunt", "single_heal", "strike", "sunstrike", "burst", "shield_wall", "cleanse"]:
+		if Balance.cooldown(ability) != 0:
+			fail("%s cooldown %d" % [ability, Balance.cooldown(ability)])
+			return
+	if Balance.cooldown("scatter") <= 0 or Balance.cooldown("phalanx") <= 0:
+		fail("maneuvers lost the lockout that keeps them from being free")
+		return
+	var sim := _lab()
+	var michael := sim._hero("michael")
+	_mob(sim, "imp", michael.pos + Vector2i(200, 0), 900)
+	sim.golden = 9000
+	sim.submit("ability", {"name": "taunt"})
+	sim.tick_once()
+	sim.golden = 9000
+	sim.submit("ability", {"name": "taunt"})
+	sim.tick_once()
+	if _feed(sim).contains("not ready"):
+		fail("taunt cooled down")
+	if sim.ability_casts < 2:
+		fail("second taunt did not cast (%s)" % _feed(sim))

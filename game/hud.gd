@@ -13,6 +13,10 @@ var game
 var _built := false
 var _portraits := {}
 var _hp := {}
+var _threat := {}
+var _aggro: Label
+var _zoom_in: Button
+var _zoom_out: Button
 var _bar := {}
 var _acts := {}
 var _stances := {}
@@ -51,6 +55,13 @@ var _menu_resume: Button
 var _menu_held_pause := false
 var _speed_i := 0
 const _SPEEDS := [1.0, 2.0, 3.0]
+const ROLE_VERB := {
+	"michael": "Taunt",
+	"raphael": "Heal",
+	"azrael": "Strike",
+	"uriel": "Sunstrike",
+	"gabriel": "Cleanse",
+}
 
 
 func _ready() -> void:
@@ -89,6 +100,10 @@ func build() -> void:
 	_pause = _btn("Pause", Vector2(1088, 8), Vector2(90, 40), _on_pause)
 	_speed = _btn("1x", Vector2(1188, 8), Vector2(76, 40), _on_speed)
 	_menu = _btn("Menu", Vector2(1088, 52), Vector2(176, 64), _on_menu)
+	_aggro = _label(Vector2(210, 78), "Aggro", 16)
+	_aggro.size = Vector2(640, 24)
+	_zoom_out = _btn("−", Vector2(8, 500), Vector2(88, 64), _on_zoom.bind(-1))
+	_zoom_in = _btn("+", Vector2(104, 500), Vector2(88, 64), _on_zoom.bind(1))
 	var names := ["Tight", "Spread", "Column"]
 	for i in names.size():
 		var b := _btn(names[i], Vector2(210 + i * 98, 640), Vector2(90, 48), _on_stance.bind(i))
@@ -100,7 +115,7 @@ func build() -> void:
 		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
 	var act_names := ["taunt", "mend", "strike", "sunstrike"]
-	var act_labels := ["Taunt", "Mend", "Strike", "Sunstrike"]
+	var act_labels := ["Taunt\nMichael", "Heal\nRaphael", "Strike\nAzrael", "Sunstrike\nUriel"]
 	for j in act_names.size():
 		var b3 := _btn(act_labels[j], Vector2(748 + j * 130, 540), Vector2(122, 72), _on_act.bind(act_names[j]))
 		_acts[act_names[j]] = b3
@@ -215,7 +230,11 @@ func refresh(snap: Dictionary) -> void:
 		_passive.text = ""
 		for cmd in _bar.keys():
 			var info: Dictionary = snap.bar[cmd]
+			if cmd == "heal":
+				info = snap.abilities.get("single_heal", info)
 			_apply_ability_button(_bar[cmd], info)
+			if cmd == "heal" and game != null and str(game.armed) == "single_heal":
+				_bar[cmd].text = "Heal one\narmed"
 	else:
 		_passive.text = _passive_line(_inspect)
 		var kit: Array = snap.kits[_inspect]
@@ -235,10 +254,41 @@ func refresh(snap: Dictionary) -> void:
 			else:
 				btn.visible = false
 			i += 1
+	var threat_rows := {}
+	var meter: Dictionary = snap.get("threat", {})
+	for row in meter.get("rows", []):
+		if typeof(row) == TYPE_DICTIONARY:
+			threat_rows[str(row.get("subtype", ""))] = row
+	var holder := str(meter.get("holder", ""))
+	var pulling := str(meter.get("pulling", ""))
+	if _aggro:
+		if int(meter.get("engaged", 0)) <= 0:
+			_aggro.text = "Aggro  —  no one is fighting"
+		elif pulling != "":
+			_aggro.text = "Aggro  %s    %s is about to pull" % [holder.capitalize(), pulling.capitalize()]
+		else:
+			_aggro.text = "Aggro  %s holds" % holder.capitalize()
 	for subtype in _portraits.keys():
 		var hs: Dictionary = snap.heroes[subtype]
 		var btn3: Button = _portraits[subtype]
 		var bar: ProgressBar = _hp[subtype]
+		var trow: Dictionary = threat_rows.get(str(subtype), {})
+		var tbar: ProgressBar = _threat.get(str(subtype), null)
+		if tbar:
+			tbar.max_value = 100
+			tbar.value = float(int(trow.get("pct", 0)))
+			if bool(trow.get("aggro", false)):
+				_paint(tbar, Color(0.95, 0.42, 0.18))
+			elif bool(trow.get("pulling", false)):
+				_paint(tbar, Color(0.95, 0.82, 0.25))
+			else:
+				_paint(tbar, Color(0.55, 0.48, 0.42))
+		var verb := str(ROLE_VERB.get(str(subtype), ""))
+		var mark := ""
+		if bool(trow.get("aggro", false)):
+			mark = "  AGGRO"
+		elif bool(trow.get("pulling", false)):
+			mark = "  PULL"
 		var flags := ""
 		if bool(hs.silence):
 			flags += " SIL"
@@ -260,13 +310,13 @@ func refresh(snap: Dictionary) -> void:
 			bar.max_value = float(maxi(int(snap.get("downed_ticks", 60)), 1))
 			bar.value = float(int(hs.get("downed_left", 0)))
 			_paint(bar, Color(0.95, 0.48, 0.16))
-			btn3.text = "%s\nDOWN %0.1fs%s" % [subtype.capitalize(), float(hs.get("downed_left", 0)) / 20.0, flags]
+			btn3.text = "%s  %s\nDOWN %0.1fs%s" % [subtype.capitalize(), verb, float(hs.get("downed_left", 0)) / 20.0, flags]
 			btn3.modulate = Color(1.0, 0.78, 0.5)
 		elif bool(hs.get("final_death", false)) or not bool(hs.alive):
 			bar.max_value = float(maxi(int(hs.hp_max), 1))
 			bar.value = 0
 			_paint(bar, Color(0.28, 0.24, 0.24))
-			btn3.text = "%s\nFALLEN" % subtype.capitalize()
+			btn3.text = "%s  %s\nFALLEN" % [subtype.capitalize(), verb]
 			btn3.modulate = Color(0.45, 0.45, 0.45)
 		else:
 			var pct := int(hs.hp) * 100 / maxi(int(hs.hp_max), 1)
@@ -278,7 +328,7 @@ func refresh(snap: Dictionary) -> void:
 			bar.max_value = float(maxi(int(hs.hp_max), 1))
 			bar.value = float(maxi(int(hs.hp), 0))
 			_paint(bar, col)
-			btn3.text = "%s\n%d%s" % [subtype.capitalize(), int(hs.hp), flags]
+			btn3.text = "%s  %s\n%d%s%s" % [subtype.capitalize(), verb, int(hs.hp), flags, mark]
 			btn3.modulate = Color(1, 1, 1)
 	_show_coach(snap)
 	var in_run := game != null and not bool(game.briefing) and str(snap.outcome) == ""
@@ -294,6 +344,7 @@ func refresh(snap: Dictionary) -> void:
 	if _phalanx and (not _phalanx.has_meta("flash_until") or int(_phalanx.get_meta("flash_until")) <= Time.get_ticks_msec()):
 		_phalanx.modulate = Color(1, 1, 1)
 	_apply_flashes()
+	_paint_armed()
 	if str(snap.outcome) != "":
 		_end.visible = true
 		_coach_bg.visible = false
@@ -424,6 +475,10 @@ func _layout_wide(w: float, h: float) -> void:
 		_feed.position = Vector2(210, h - 176.0)
 		_feed.size = Vector2(520, 56)
 	_place_acts(false, w, h)
+	_place_zoom(h)
+	if _aggro:
+		_aggro.position = Vector2(210, 78)
+		_aggro.size = Vector2(minf(760.0, w - 420.0), 24)
 	if _passive:
 		_passive.position = Vector2(210, h - 252.0)
 		_passive.size = Vector2(760, 22)
@@ -507,6 +562,20 @@ func _layout_narrow(w: float, h: float) -> void:
 		_hide.position = Vector2(w - 156.0, h - 284.0)
 		_hide.size = Vector2(140, 32)
 	_place_acts(true, w, h)
+	_place_zoom(h)
+	if _aggro:
+		_aggro.position = Vector2(210, 78)
+		_aggro.size = Vector2(maxi(w - 430.0, 180.0), 24)
+
+
+func _place_zoom(h: float) -> void:
+	var y := minf(8.0 + 5.0 * 96.0 + 8.0, h - 420.0)
+	if _zoom_out:
+		_zoom_out.position = Vector2(8, y)
+		_zoom_out.size = Vector2(88, 64)
+	if _zoom_in:
+		_zoom_in.position = Vector2(104, y)
+		_zoom_in.size = Vector2(88, 64)
 
 
 func _build_portraits() -> void:
@@ -529,7 +598,9 @@ func _build_portraits() -> void:
 			hover.bg_color = colors[order[i]].lightened(0.15)
 			b.add_theme_stylebox_override("hover", hover)
 		_portraits[order[i]] = b
-		_hp[order[i]] = _hp_bar(b, Vector2(10, 64), Vector2(168, 18))
+		_hp[order[i]] = _hp_bar(b, Vector2(10, 48), Vector2(168, 12))
+		_threat[order[i]] = _hp_bar(b, Vector2(10, 66), Vector2(168, 10))
+		_paint(_threat[order[i]], Color(0.95, 0.55, 0.2))
 
 
 func _build_brief() -> void:
@@ -607,7 +678,7 @@ func _passive_line(subtype: String) -> String:
 		"raphael":
 			return "Raphael — passive: regenerates while he is not casting."
 		"azrael":
-			return "Azrael — passive: a short aura that reveals nearby traps."
+			return "Azrael — Detect is the only thing that shows a trap."
 		"uriel":
 			return "Uriel — passive: Radiance. Attacks stack and boost the next holy zone."
 		"gabriel":
@@ -705,7 +776,18 @@ func _on_phalanx() -> void:
 	game.command("phalanx", {})
 
 
+func _on_zoom(dir: int) -> void:
+	if game == null or game.board == null:
+		return
+	game.board.nudge_zoom(dir)
+
+
 func _on_cmd(cmd: String) -> void:
+	if cmd == "heal":
+		_arm_or_fire("single_heal")
+		return
+	if game != null:
+		game.armed = ""
 	game.command(cmd, {})
 
 
@@ -722,6 +804,15 @@ func _on_act(which: String) -> void:
 			ability = "sunstrike"
 		_:
 			return
+	_arm_or_fire(ability)
+
+
+func _arm_or_fire(ability: String) -> void:
+	if game != null and game.needs_target(ability):
+		game.arm(ability)
+		return
+	if game != null:
+		game.armed = ""
 	game.command("ability", {"name": ability})
 
 
@@ -770,6 +861,9 @@ func _place_acts(narrow: bool, w: float, h: float) -> void:
 
 
 func _on_portrait(subtype: String) -> void:
+	if game != null and str(game.armed) in GameRoot.ALLY_ARM:
+		game.cast_armed({"target": subtype})
+		return
 	if _inspect == subtype:
 		_inspect = ""
 	else:
@@ -778,7 +872,29 @@ func _on_portrait(subtype: String) -> void:
 
 
 func _on_ability(ability: String) -> void:
-	game.command("ability", {"name": ability})
+	_arm_or_fire(ability)
+
+
+func _paint_armed() -> void:
+	if game == null:
+		return
+	var armed := str(game.armed)
+	var lit := Color(1.45, 1.15, 0.45)
+	for key in _acts.keys():
+		var want := ""
+		match key:
+			"taunt":
+				want = "taunt"
+			"mend":
+				want = "single_heal"
+			"strike":
+				want = "strike"
+			"sunstrike":
+				want = "sunstrike"
+		if armed != "" and armed == want:
+			_acts[key].modulate = lit
+	if _inspect == "" and _bar.has("heal") and armed == "single_heal":
+		_bar.heal.modulate = lit
 
 
 func _on_press_fx(btn: Button) -> void:

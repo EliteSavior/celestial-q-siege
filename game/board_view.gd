@@ -80,6 +80,9 @@ var game
 var snap: Dictionary = {}
 var cam := Vector2.ZERO
 var zoom := 1.0
+## 1.0 sat on the room-fit zoom. A little under 1.0 of that fit is the old
+## view; 1.22 starts slightly closer so the squad reads at a glance.
+var user_zoom := 1.22
 var cam_ready := false
 
 
@@ -128,10 +131,21 @@ func handle_tap(screen: Vector2) -> void:
 	var picked := _pick_touch(milli)
 	if not picked.is_empty():
 		if str(picked.kind) == "angel":
-			game.command("ally", {"target": str(picked.subtype)})
+			if str(game.armed) in GameRoot.ALLY_ARM:
+				game.cast_armed({"target": str(picked.subtype)})
+			else:
+				game.command("ally", {"target": str(picked.subtype)})
+		elif str(game.armed) in GameRoot.FOE_ARM:
+			game.cast_armed({"id": int(picked.id)})
 		else:
 			game.command("focus", {"id": int(picked.id)})
 		return
+	var shrine: Vector2i = snap.get("shrine_tile", Vector2i(-1, -1))
+	if shrine.x >= 0 and not bool(snap.get("shrine_done", false)):
+		if Fixed.dist(milli, Fixed.tile_center(shrine)) <= 1400:
+			game.command("channel_shrine", {})
+			game.command("move_tile", {"tile": shrine})
+			return
 	var stake_id := str(snap.get("stake_id", ""))
 	if stake_id != "":
 		var stake_node: Vector2i = game.sim.map.node_tile("%s:rear" % stake_id)
@@ -422,7 +436,7 @@ func _process(_delta: float) -> void:
 	var bounds := _iso_bounds(rect)
 	var view := _view_size()
 	var fit := minf(view.x / maxf(bounds.size.x, 1.0), view.y / maxf(bounds.size.y, 1.0))
-	zoom = clampf(fit / 1.12, 0.35, 1.45)
+	zoom = clampf(fit / 1.12 * user_zoom, 0.35, 2.4)
 	var span := view / zoom
 	var iso := _iso_milli(snap.anchor)
 	var desired := iso - span * 0.5
@@ -493,6 +507,12 @@ func _draw() -> void:
 				_draw_tile_diamond(c, Color(0.98, 0.78, 0.22, 0.95), 0.46)
 				if font:
 					_plaque(font, c + Vector2(-28, -22), "STAKE", Color(0.15, 0.1, 0.02), Color(0.98, 0.82, 0.3), 13)
+			elif str(node_name) == "shrine":
+				var purified := str(room3.id) == str(snap.party_room) and bool(snap.get("shrine_done", false))
+				var sc := Color(0.45, 0.9, 0.82, 0.4) if purified else Color(0.35, 0.85, 0.95, 0.9)
+				_draw_tile_diamond(c, sc, 0.4)
+				if font and not purified:
+					_plaque(font, c + Vector2(-36, -22), "SHRINE", Color(0.04, 0.1, 0.1), sc, 13)
 			else:
 				_draw_tile_diamond(c, Color(0.7, 0.64, 0.5, 0.55), 0.16)
 	if snap.path is Array:
@@ -561,6 +581,8 @@ func _draw() -> void:
 	if bool(snap.channeling) and font:
 		var stake_name := str(snap.get("stake_name", "the stake"))
 		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Channeling %s  %d%%" % [stake_name, int(snap.altar_progress)], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
+	elif bool(snap.get("channeling_shrine", false)) and font:
+		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Purifying shrine  %d%%" % int(snap.get("shrine_progress", 0)), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.55, 0.95, 0.9))
 
 
 func _draw_kits(font) -> void:
@@ -664,6 +686,80 @@ func _draw_telegraphs(font) -> void:
 		_plaque(font, _view_origin() + Vector2(8, 28), "%s  %0.1fs" % [str(TELL_LABEL.get(name, name)), float(remain) / 20.0], tell, Color(0.06, 0.04, 0.05, 0.92), 20)
 
 
+## Temporary silhouettes. Each role and mob is a different shape so the
+## board can be read before final art. Drawn from the snapshot only.
+func _draw_placeholder(p: Vector2, subtype: String, col: Color, radius: float, foe: bool) -> void:
+	var ink := Color(col.r * 0.25, col.g * 0.25, col.b * 0.25, 0.9)
+	match subtype:
+		"michael":
+			var shield := PackedVector2Array([
+				p + Vector2(-radius, -radius * 0.2),
+				p + Vector2(radius, -radius * 0.2),
+				p + Vector2(radius * 0.85, radius * 0.7),
+				p + Vector2(0, radius * 1.25),
+				p + Vector2(-radius * 0.85, radius * 0.7),
+			])
+			draw_colored_polygon(shield, col)
+			draw_line(p + Vector2(0, -radius * 0.1), p + Vector2(0, radius * 0.7), ink, 2.0)
+			draw_line(p + Vector2(-radius * 0.45, radius * 0.15), p + Vector2(radius * 0.45, radius * 0.15), ink, 2.0)
+		"raphael":
+			draw_circle(p, radius * 0.72, col)
+			draw_line(p + Vector2(0, -radius), p + Vector2(0, radius), Color(0.9, 1, 0.9), 3.0)
+			draw_line(p + Vector2(-radius * 0.7, 0), p + Vector2(radius * 0.7, 0), Color(0.9, 1, 0.9), 3.0)
+		"azrael":
+			var blade := PackedVector2Array([
+				p + Vector2(0, -radius * 1.2),
+				p + Vector2(radius * 0.85, radius * 0.2),
+				p + Vector2(0, radius * 0.55),
+				p + Vector2(-radius * 0.35, radius * 0.15),
+			])
+			draw_colored_polygon(blade, col)
+			draw_line(p + Vector2(0, radius * 0.4), p + Vector2(0, radius * 1.15), ink, 3.0)
+		"uriel":
+			var star := PackedVector2Array()
+			for i in 8:
+				var a := -PI * 0.5 + TAU * float(i) / 8.0
+				var r := radius * (1.15 if i % 2 == 0 else 0.45)
+				star.append(p + Vector2(cos(a) * r, sin(a) * r))
+			draw_colored_polygon(star, col)
+		"gabriel":
+			draw_circle(p, radius * 0.62, col)
+			draw_arc(p + Vector2(0, -radius * 0.15), radius * 0.95, PI, TAU, 16, Color(1, 0.95, 0.7), 3.0)
+		"imp":
+			var horn := PackedVector2Array([
+				p + Vector2(0, -radius * 1.15),
+				p + Vector2(radius, radius * 0.7),
+				p + Vector2(-radius, radius * 0.7),
+			])
+			draw_colored_polygon(horn, col)
+			draw_circle(p + Vector2(-radius * 0.28, -radius * 0.15), 2.2, ink)
+			draw_circle(p + Vector2(radius * 0.28, -radius * 0.15), 2.2, ink)
+		"heavy":
+			draw_rect(Rect2(p + Vector2(-radius, -radius * 0.85), Vector2(radius * 2.0, radius * 1.7)), col)
+			draw_rect(Rect2(p + Vector2(-radius * 1.35, -radius * 0.2), Vector2(radius * 0.4, radius * 0.35)), col)
+			draw_rect(Rect2(p + Vector2(radius * 0.95, -radius * 0.2), Vector2(radius * 0.4, radius * 0.35)), col)
+		"elite":
+			draw_colored_polygon(PackedVector2Array([
+				p + Vector2(0, -radius * 1.2),
+				p + Vector2(radius, 0),
+				p + Vector2(0, radius * 1.2),
+				p + Vector2(-radius, 0),
+			]), col)
+			draw_line(p + Vector2(-radius * 0.7, -radius * 0.7), p + Vector2(radius * 0.7, radius * 0.7), ink, 2.0)
+			draw_line(p + Vector2(radius * 0.7, -radius * 0.7), p + Vector2(-radius * 0.7, radius * 0.7), ink, 2.0)
+		"lucifer":
+			draw_circle(p, radius * 0.7, col)
+			for i in 5:
+				var a2 := -PI * 0.5 + TAU * float(i) / 5.0
+				draw_line(p, p + Vector2(cos(a2) * radius * 1.35, sin(a2) * radius * 1.35), col, 4.0)
+		_:
+			draw_circle(p, radius * (0.9 if foe else 0.75), col)
+
+
+func nudge_zoom(dir: int) -> void:
+	user_zoom = clampf(user_zoom + float(dir) * 0.12, 0.75, 1.9)
+
+
 func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 	var p := _milli_screen(u.pos)
 	var radius := 16.0 if str(u.subtype) == "lucifer" else (11.0 if foe else 10.0)
@@ -674,14 +770,7 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 		draw_arc(p, radius + 10, 0, TAU, 18, TELL_COLOR.echo, 3.0)
 	if foe and int(u.id) == int(snap.focus_id):
 		draw_arc(p, radius + 8, 0, TAU, 18, Color(1, 1, 1, 0.9), 2.0)
-	var foot := PackedVector2Array([
-		p + Vector2(0, -radius * 0.55),
-		p + Vector2(radius * 1.15, 0),
-		p + Vector2(0, radius * 0.55),
-		p + Vector2(-radius * 1.15, 0),
-	])
-	draw_colored_polygon(foot, Color(col.r * 0.28, col.g * 0.28, col.b * 0.28, 0.85))
-	draw_circle(p, radius * 0.82, col)
+	_draw_placeholder(p, str(u.subtype), col, radius, foe)
 	if bool(u.get("mark", false)):
 		draw_arc(p, radius + 5, 0, TAU, 16, Color(1, 0.2, 0.25), 2.0)
 	if bool(u.get("silence", false)):

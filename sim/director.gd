@@ -199,7 +199,10 @@ func _fire_committed() -> bool:
 		elif kind == "cursed":
 			var curse := "silence"
 			var target := "raphael"
-			if sim.stance == STANCE_SPREAD:
+			if sim.curses_cast % 4 == 3:
+				curse = "weaken"
+				target = "azrael"
+			elif sim.stance == STANCE_SPREAD:
 				curse = "mark"
 			elif sim.angel_hp_pct("raphael") < 45:
 				curse = "rot"
@@ -479,8 +482,13 @@ func _try_curse(reserved: int) -> int:
 	if sim.tick >= silence_lock and int(sim._hero("azrael").get("silence_until", 0)) <= sim.tick:
 		fresh.append(["silence", "azrael"])
 	var options: Array = []
+	# Every fourth curse leads with Weaken. Otherwise it is the fallback
+	# when Silence, Rot, and Mark cannot be paid.
+	if sim.curses_cast % 4 == 3:
+		options.append(["weaken", "azrael"])
 	options.append_array(fresh)
 	options.append_array(refresh)
+	options.append(["weaken", "uriel"])
 	for opt in options:
 		var curse := str(opt[0])
 		var who := str(opt[1])

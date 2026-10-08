@@ -16,6 +16,11 @@ var paused := false
 var briefing := true
 var _tap_frame := -1
 var _booted := false
+## View-only. Arming a single-target rite does not touch the sim.
+var armed := ""
+
+const ALLY_ARM := ["single_heal", "slow_revive", "emergency_res"]
+const FOE_ARM := ["taunt", "strike", "burst", "sunstrike"]
 
 
 func _ready() -> void:
@@ -106,6 +111,27 @@ func note_drag(screen: Vector2) -> void:
 	board.handle_drag(screen)
 
 
+func needs_target(ability: String) -> bool:
+	return ability in ALLY_ARM or ability in FOE_ARM
+
+
+func arm(ability: String) -> void:
+	if armed == ability:
+		armed = ""
+	else:
+		armed = ability
+
+
+func cast_armed(args: Dictionary) -> void:
+	if armed == "":
+		return
+	var ability := armed
+	armed = ""
+	var payload := args.duplicate()
+	payload["name"] = ability
+	command("ability", payload)
+
+
 func command(type: String, args: Dictionary = {}) -> void:
 	if sim == null or briefing or sim.outcome != "":
 		return
@@ -129,6 +155,7 @@ func _reset_run(to_title: bool) -> void:
 		board.cam_ready = false
 	if juice:
 		juice.reset()
+	armed = ""
 	if hud and hud.has_method("on_new_run"):
 		hud.on_new_run(to_title)
 
