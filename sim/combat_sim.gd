@@ -100,6 +100,8 @@ var spawns_placed := 0
 var curses_cast := 0
 var echo_style := ""
 var echo_units: Array = []
+var echo_traps := 0
+var echo_spent := 0
 var echo_spawned := false
 var early_descend := false
 var banner := ""
@@ -107,6 +109,7 @@ var banner_until := 0
 var lucifer_pattern: Array = []
 var lucifer_step := 0
 var lucifer_next := 0
+var transform_until := 0
 var telegraph := {}
 var hell_rain_marks: Array = []
 
@@ -195,6 +198,8 @@ func reset() -> void:
 	curses_cast = 0
 	echo_style = ""
 	echo_units = []
+	echo_traps = 0
+	echo_spent = 0
 	echo_spawned = false
 	early_descend = false
 	banner = ""
@@ -202,6 +207,7 @@ func reset() -> void:
 	lucifer_pattern = ["hell_rain", "cleave", "judgment", "grasp"]
 	lucifer_step = 0
 	lucifer_next = 0
+	transform_until = 0
 	telegraph = {}
 	hell_rain_marks = []
 	golden_income_room = {}
@@ -245,6 +251,7 @@ func tick_once() -> void:
 	_passives()
 	_reveal_traps()
 	_maybe_repath()
+	_arm_echo_traps()
 	_trigger_traps()
 	_mob_ai()
 	_angel_autos()
@@ -312,6 +319,8 @@ func _exec(c: Dictionary) -> void:
 			_cmd_curse(args)
 		"descend":
 			_cmd_descend(bool(args.get("early", false)))
+		"boss":
+			_cmd_boss(str(args.get("button", "")))
 		"commit":
 			_cmd_commit(args)
 		_:
@@ -799,24 +808,28 @@ func _cmd_spawn(args: Dictionary) -> void:
 		dark -= Balance.summon_cost(unit)
 		spawns_placed += 1
 	var pos := Fixed.tile_center(map.node_tile(node))
+	var tell := Balance.BOSS_TELL if echo else -1
 	if unit == "swarm":
 		for i in 3:
 			var off := Vector2i((i - 1) * 450, (i - 1) * 280)
-			_make_mob("imp", "Imp", pos + off, 34, 6, 18, 1100, 150, [], node)
+			_make_mob("imp", "Imp", pos + off, 34, 6, 18, 1100, 150, [], node, tell)
 		_log("Imps claw their way in.", "bad")
 	elif unit == "heavy":
-		_make_mob("heavy", "Heavy Demon", pos, 260, 13, 18, 1200, 85, [], node)
+		_make_mob("heavy", "Heavy Demon", pos, 260, 13, 18, 1200, 85, [], node, tell)
 		_log("A heavy demon rises.", "bad")
 	elif unit == "elite":
 		var affixes: Array = [] if echo else ["teleporter", "molten"]
-		_make_mob("elite", "Elite", pos, 420, 12, 20, 1300, 100, affixes, node)
+		_make_mob("elite", "Elite", pos, 420, 12, 20, 1300, 100, affixes, node, tell)
 		_log("An elite takes the node — Teleporter, Molten.", "bad")
 	elif unit == "imp":
-		_make_mob("imp", "Imp", pos, 34, 6, 18, 1100, 150, [], node)
+		_make_mob("imp", "Imp", pos, 34, 6, 18, 1100, 150, [], node, tell)
 		_log("An imp crawls out of the echo.", "bad")
 
 
 func _cmd_trap(args: Dictionary) -> void:
+	if bool(args.get("echo", false)):
+		_cmd_echo_trap(args)
+		return
 	if phase != "dungeon":
 		return
 	var kind := str(args.get("kind", ""))
@@ -851,6 +864,41 @@ func _cmd_trap(args: Dictionary) -> void:
 	}
 	order.append(id)
 	order.sort()
+
+
+func _cmd_echo_trap(args: Dictionary) -> void:
+	if phase != "lucifer":
+		return
+	var kind := str(args.get("kind", ""))
+	var node := str(args.get("node", ""))
+	if Balance.trap_cost(kind) >= 99999:
+		return
+	if map.node_tile(node).x < 0 or node_occupied_by_trap(node):
+		return
+	var pos := Fixed.tile_center(map.node_tile(node))
+	var id := _alloc()
+	entities[id] = {
+		"id": id,
+		"team": "demon",
+		"kind": "trap",
+		"subtype": kind,
+		"name": kind,
+		"pos": pos,
+		"hp": 1,
+		"hp_max": 1,
+		"alive": true,
+		"armed": false,
+		"revealed": true,
+		"echo": true,
+		"arm_at": tick + Balance.BOSS_TELL,
+		"node": node,
+		"room": node.split(":")[0],
+		"avoided": false,
+		"radius": Balance.HELLFLAME_RADIUS if kind == "hellflame" else 0,
+	}
+	order.append(id)
+	order.sort()
+	_log("An echo %s is being laid." % kind, "bad")
 
 
 func _cmd_curse(args: Dictionary) -> void:
@@ -952,20 +1000,21 @@ func _cmd_descend(early: bool) -> void:
 	early_descend = early
 	var hp_pct := party_hp_pct()
 	var budget := Balance.echo_budget(dark, hp_pct, early)
+	echo_spent = budget
 	dark -= budget
 	if dark < 0:
 		dark = 0
 	echo_style = _history_style()
-	echo_units = _wave_from_budget(budget, hp_pct)
-	if echo_style == "summons" and echo_units.size() < 6:
-		echo_units.append("imp")
-	trap_cap = Balance.ECHO_TRAP_CAP
+	_shape_echo(budget, hp_pct)
 	_cut_traps()
-	if echo_style == "traps":
+	if echo_style == "traps" and traps_placed >= Balance.HISTORY_FLOOR:
 		_reignite_traps()
 	lucifer_pattern = _pattern_for(echo_style)
 	lucifer_step = 0
-	lucifer_next = tick + 30
+	transform_until = tick + Balance.TRANSFORM_CAST
+	lucifer_next = transform_until
+	telegraph = {}
+	hell_rain_marks = []
 	var hp := Balance.LUCIFER_HP_EARLY if early else Balance.LUCIFER_HP
 	var pos := _lucifer_spawn_pos()
 	var id := _alloc()
@@ -989,18 +1038,54 @@ func _cmd_descend(early: bool) -> void:
 	}
 	order.append(id)
 	order.sort()
-	banner = "LUCIFER PHASE"
-	banner_until = tick + 90
+	banner = "THE DEMON LORD TRANSFORMS"
+	banner_until = transform_until
 	var when := "early" if early else "at the throne"
-	_log("Lucifer descends %s. Echo of %s." % [when, echo_style], "bad")
-	# The one committed wave is already paid for. It arrives on a timer.
-	var delay := Balance.ECHO_DELAY
+	_log("The demon lord transforms %s. Echo of %s." % [when, echo_style], "bad")
+	# One committed wave, paid for by the descent. It arrives after the rise.
+	var delay := Balance.TRANSFORM_CAST + Balance.ECHO_DELAY
 	for u in echo_units:
 		var node := _echo_node()
 		var unit := "heavy" if str(u) == "heavy" else "imp"
 		submit("spawn", {"unit": unit, "node": node, "echo": true}, "demon", delay)
 		delay += 8
+	_schedule_echo_traps()
 	echo_spawned = true
+
+
+func legal_boss(button: String) -> String:
+	if phase != "lucifer":
+		return "phase"
+	if outcome != "":
+		return "over"
+	var boss := _boss()
+	if boss.is_empty() or not bool(boss.get("alive", false)):
+		return "dead"
+	if not _boss_button_ok(button):
+		return "button"
+	if tick < transform_until:
+		return "transform"
+	if not telegraph.is_empty():
+		return "busy"
+	if tick < lucifer_next:
+		return "cooling"
+	if _command_pending("boss"):
+		return "busy"
+	return ""
+
+
+func _boss_button_ok(button: String) -> bool:
+	return button == "hell_rain" or button == "cleave" or button == "judgment" or button == "grasp"
+
+
+func _cmd_boss(button: String) -> void:
+	var why := legal_boss(button)
+	if why != "":
+		return
+	var boss := _boss()
+	_open_telegraph(boss, button)
+	lucifer_step += 1
+	lucifer_next = int(telegraph.until) + Balance.BOSS_GAP
 
 
 # --- legality ---------------------------------------------------------------
@@ -1148,7 +1233,11 @@ func commitment_open(plan: String = "") -> bool:
 func node_occupied_by_trap(node: String) -> bool:
 	for id in order:
 		var e: Dictionary = entities[id]
-		if str(e.kind) == "trap" and bool(e.get("armed", false)) and str(e.get("node", "")) == node:
+		if str(e.kind) != "trap" or str(e.get("node", "")) != node:
+			continue
+		if bool(e.get("armed", false)):
+			return true
+		if bool(e.get("echo", false)) and bool(e.get("alive", false)):
 			return true
 	return false
 
@@ -1224,6 +1313,10 @@ func _idle_tick() -> void:
 
 
 func _formation() -> void:
+	# Scatter Roll holds the shove until the tell resolves. Pulling back
+	# into the marked tiles would make the dodge a lie.
+	if tick < scatter_until:
+		return
 	var offsets := _offsets(_effective_stance())
 	var i := 0
 	for a in _angels():
@@ -1557,55 +1650,48 @@ func _lucifer() -> void:
 	var boss := _boss()
 	if boss.is_empty() or not boss.alive:
 		return
+	# The rise is a tell. No steps, no swings, no buttons landing.
+	if tick < transform_until:
+		return
+	if not telegraph.is_empty():
+		if tick < int(telegraph.until):
+			return
+		_resolve_telegraph(boss)
+		telegraph = {}
+		hell_rain_marks = []
+		return
 	var tgt := _nearest_angel(boss.pos)
-	if not tgt.is_empty():
-		var dist := Fixed.dist(boss.pos, tgt.pos)
-		if dist > 1800:
-			boss.pos = _slide(boss.pos, Fixed.step_toward(boss.pos, tgt.pos, int(boss.speed)))
-		elif dist <= int(boss.range):
-			boss.atk_cd = int(boss.atk_cd) - 1
-			if int(boss.atk_cd) <= 0:
-				boss.atk_cd = int(boss.period)
-				_hurt(tgt, int(boss.atk), "single", boss.id, false)
-	if telegraph.is_empty():
-		if tick >= lucifer_next:
-			_open_telegraph(boss)
+	if tgt.is_empty():
 		return
-	if tick < int(telegraph.until):
-		return
-	_resolve_telegraph(boss)
-	telegraph = {}
-	hell_rain_marks = []
-	lucifer_step += 1
-	lucifer_next = tick + 36
+	var dist := Fixed.dist(boss.pos, tgt.pos)
+	if dist > 1800:
+		boss.pos = _slide(boss.pos, Fixed.step_toward(boss.pos, tgt.pos, int(boss.speed)))
+	elif dist <= int(boss.range):
+		boss.atk_cd = int(boss.atk_cd) - 1
+		if int(boss.atk_cd) <= 0:
+			boss.atk_cd = int(boss.period)
+			_hurt(tgt, int(boss.atk), "single", boss.id, false)
 
 
-func _open_telegraph(boss: Dictionary) -> void:
-	if lucifer_pattern.is_empty():
-		return
-	var name := str(lucifer_pattern[lucifer_step % lucifer_pattern.size()])
-	var dur := 44
-	if name == "judgment":
-		dur = 60
-	elif name == "grasp":
-		dur = 40
-	telegraph = {"name": name, "until": tick + dur, "from": boss.pos}
+func _open_telegraph(boss: Dictionary, name: String) -> void:
+	telegraph = {"name": name, "until": tick + Balance.BOSS_TELL, "from": boss.pos}
 	if name == "hell_rain":
 		hell_rain_marks = []
 		for a in _angels():
 			if a.alive:
 				hell_rain_marks.append({"id": a.id, "pos": a.pos})
-		_log("Hell rain — move.", "bad")
+		_log("Hell rain marks the ground. Move.", "bad")
 	elif name == "cleave":
 		var aim := anchor
 		telegraph.aim = aim
-		_log("Lucifer cleaves.", "bad")
+		telegraph.end = Fixed.approach(boss.pos, aim, Balance.CLEAVE_LENGTH)
+		_log("Cleave lane. Leave the line.", "bad")
 	elif name == "judgment":
 		var victim := _lowest_living()
 		telegraph.target = victim.id if not victim.is_empty() else 0
-		_log("Judgment gathers on %s." % (victim.name if not victim.is_empty() else "the party"), "bad")
+		_log("Judgment on %s." % (victim.name if not victim.is_empty() else "the party"), "bad")
 	elif name == "grasp":
-		_log("Lucifer reaches.", "bad")
+		_log("Grasp. Phalanx, or be pulled in.", "bad")
 
 
 func _resolve_telegraph(boss: Dictionary) -> void:
@@ -1618,12 +1704,12 @@ func _resolve_telegraph(boss: Dictionary) -> void:
 			if Fixed.dist(a.pos, mark.pos) <= Balance.HELL_RAIN_RADIUS:
 				_hurt(a, Balance.HELL_RAIN_DMG, "boss", boss.id, true)
 	elif name == "cleave":
-		var aim: Vector2i = telegraph.get("aim", anchor)
-		var end := Fixed.approach(boss.pos, aim, Balance.CLEAVE_LENGTH)
+		var origin: Vector2i = telegraph.get("from", boss.pos)
+		var end: Vector2i = telegraph.get("end", origin)
 		for a in _angels():
 			if not a.alive:
 				continue
-			if _dist_to_segment(a.pos, boss.pos, end) <= Balance.CLEAVE_HALF_WIDTH:
+			if _dist_to_segment(a.pos, origin, end) <= Balance.CLEAVE_HALF_WIDTH:
 				_hurt(a, Balance.CLEAVE_DMG, "boss", boss.id, true)
 	elif name == "judgment":
 		var a2 := _ent(int(telegraph.get("target", 0)))
@@ -1633,9 +1719,7 @@ func _resolve_telegraph(boss: Dictionary) -> void:
 		for a3 in _angels():
 			if not a3.alive:
 				continue
-			var pulled := true
-			if tick < phalanx_until:
-				pulled = false
+			var pulled := tick >= phalanx_until
 			if pulled:
 				a3.pos = _clamp_pos(Fixed.step_toward(a3.pos, boss.pos, Balance.GRASP_PULL))
 			_hurt(a3, Balance.GRASP_DMG if pulled else Balance.GRASP_DMG / 2, "boss", boss.id, true)
@@ -2191,6 +2275,8 @@ func build_snapshot() -> Dictionary:
 					"pos": e.pos,
 					"armed": e.armed,
 					"node": e.node,
+					"echo": bool(e.get("echo", false)),
+					"arm_at": int(e.get("arm_at", 0)),
 				})
 		elif kind == "zone":
 			if vis.has(map.id_at_tile(Fixed.tile_of(e.pos))):
@@ -2295,7 +2381,11 @@ func build_snapshot() -> Dictionary:
 		"idle_ticks": idle_ticks,
 		"banner": banner if tick < banner_until or outcome != "" else "",
 		"echo_style": echo_style,
+		"echo_units": echo_units.duplicate(),
+		"echo_traps": echo_traps,
+		"echo_spent": echo_spent,
 		"early": early_descend,
+		"transform_until": transform_until,
 		"telegraph": telegraph.duplicate(true),
 		"hell_rain": hell_rain_marks.duplicate(true),
 		"feed": feed.duplicate(true),
@@ -2334,6 +2424,10 @@ func checksum() -> int:
 	h = Fixed.mix(h, anchor.x)
 	h = Fixed.mix(h, anchor.y)
 	h = Fixed.mix(h, 1 if phase == "lucifer" else 0)
+	h = Fixed.mix(h, transform_until)
+	h = Fixed.mix(h, lucifer_step)
+	h = Fixed.mix(h, echo_spent)
+	h = Fixed.mix(h, echo_traps)
 	for id in order:
 		var e: Dictionary = entities[id]
 		h = Fixed.mix(h, int(e.id))
@@ -2397,9 +2491,10 @@ func _spawn_heroes() -> void:
 		order.append(id)
 
 
-func _make_mob(subtype: String, name: String, pos: Vector2i, hp: int, atk: int, period: int, range: int, speed: int, affixes: Array, node: String) -> void:
+func _make_mob(subtype: String, name: String, pos: Vector2i, hp: int, atk: int, period: int, range: int, speed: int, affixes: Array, node: String, tell: int = -1) -> void:
 	var id := _alloc()
 	var room := node.split(":")[0]
+	var windup := Balance.SPAWN_TELEGRAPH if tell < 0 else tell
 	entities[id] = {
 		"id": id,
 		"team": "demon",
@@ -2417,7 +2512,7 @@ func _make_mob(subtype: String, name: String, pos: Vector2i, hp: int, atk: int, 
 		"range": range,
 		"speed": speed,
 		"affixes": affixes.duplicate(),
-		"active_at": tick + Balance.SPAWN_TELEGRAPH,
+		"active_at": tick + windup,
 		"teleport_at": tick + Balance.BLINK_PERIOD,
 		"blink": {},
 		"node": node,
@@ -2782,7 +2877,10 @@ func _disarm_target() -> Dictionary:
 	var best_d := Balance.DISARM_RANGE + 1
 	for id in order:
 		var e: Dictionary = entities[id]
-		if str(e.kind) != "trap" or not bool(e.get("armed", false)) or not bool(e.get("revealed", false)):
+		if str(e.kind) != "trap" or not bool(e.get("revealed", false)) or not bool(e.get("alive", false)):
+			continue
+		var arming := bool(e.get("echo", false)) and not bool(e.get("armed", false))
+		if not bool(e.get("armed", false)) and not arming:
 			continue
 		var d := Fixed.dist(azrael.pos, e.pos)
 		if d < best_d:
@@ -3050,14 +3148,79 @@ func _lucifer_spawn_pos() -> Vector2i:
 	return _clamp_pos(anchor + Fixed.rotate_facing(Vector2i(2500, 0), facing))
 
 
+func _shape_echo(budget: int, hp_pct: int) -> void:
+	var units := _wave_from_budget(budget, hp_pct)
+	echo_traps = 0
+	trap_cap = Balance.ECHO_TRAP_CAP
+	if echo_style == "traps" and traps_placed >= Balance.HISTORY_FLOOR:
+		var kept: Array = []
+		for u in units:
+			if str(u) == "heavy" and kept.is_empty():
+				kept.append("heavy")
+		units = kept
+		echo_traps = mini(2, 1 + traps_placed / 12)
+		trap_cap = Balance.ECHO_TRAP_CAP_TRAPPY
+		if early_descend:
+			echo_traps = maxi(0, echo_traps - 1)
+			trap_cap = Balance.ECHO_TRAP_CAP
+			if not units.is_empty():
+				units.pop_back()
+	elif echo_style == "summons" and spawns_placed >= Balance.HISTORY_FLOOR:
+		var bonus := mini(4, spawns_placed / 3)
+		if early_descend:
+			bonus = bonus / 2
+		var i := 0
+		while i < bonus and units.size() < Balance.MOB_CAP:
+			units.append("imp")
+			i += 1
+	echo_units = units
+
+
+func _schedule_echo_traps() -> void:
+	if echo_traps <= 0:
+		return
+	var kinds := ["spike", "hellflame", "snare"]
+	var slots := ["choke", "flank", "center"]
+	var delay := Balance.TRANSFORM_CAST + 20
+	var n := 0
+	for slot in slots:
+		if n >= echo_traps:
+			break
+		var node := "%s:%s" % [party_room_id, slot]
+		if map.node_tile(node).x < 0:
+			continue
+		var kind := str(kinds[n % kinds.size()])
+		submit("trap", {"kind": kind, "node": node, "echo": true}, "demon", delay)
+		delay += 6
+		n += 1
+
+
+func _arm_echo_traps() -> void:
+	for id in order.duplicate():
+		var e: Dictionary = entities[id]
+		if str(e.kind) != "trap" or not bool(e.get("echo", false)):
+			continue
+		if bool(e.get("armed", false)) or not bool(e.get("alive", false)):
+			continue
+		if tick < int(e.get("arm_at", 0)):
+			continue
+		if _armed_trap_count() >= trap_cap:
+			e.alive = false
+			_log("The echo trap fades. The cap holds.", "info")
+			continue
+		e.armed = true
+		_log("Echo %s arms." % str(e.subtype), "bad")
+
+
 func _cut_traps() -> void:
+	var keep := maxi(0, trap_cap - echo_traps)
 	var armed: Array = []
 	for id in order:
 		var e: Dictionary = entities[id]
 		if str(e.kind) == "trap" and bool(e.get("armed", false)):
 			armed.append(e)
 	armed.sort_custom(func(a, b): return int(a.id) < int(b.id))
-	while armed.size() > trap_cap:
+	while armed.size() > keep:
 		var old: Dictionary = armed.pop_front()
 		old.armed = false
 		old.alive = false
@@ -3066,7 +3229,7 @@ func _cut_traps() -> void:
 func _reignite_traps() -> void:
 	for id in order:
 		var e: Dictionary = entities[id]
-		if str(e.kind) != "trap":
+		if str(e.kind) != "trap" or not bool(e.get("armed", false)):
 			continue
 		if not _visible_rooms().has(str(e.room)) and str(e.room) != party_room_id:
 			continue

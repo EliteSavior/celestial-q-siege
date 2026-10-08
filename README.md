@@ -4,7 +4,7 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M4 (the AI Demon Lord) on the M3 kits.** The director spends Dark through the same `submit()` path a human demon will use. Priority is Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. On a march that is already over the line, that spend happens before the next punish, so a cooldown cannot refill the bank. Swarms are always available. Heavies unlock after 2 rooms cleared. The one elite (Teleporter and Molten) unlocks after 4, and committing it spends Dark immediately and shows a 3-second cast bar before the unit exists. Reinforcements go into the next room, not the one being fought. Spike, snare, and hellflame are laid ahead, two to a room, and stay hidden until Azrael's aura or Detect. A trap cluster is committed the same way as the elite. Silence, Rot, and Mark each show a cast bar before they land. On the current tune a scripted competent party reaches Lucifer at 499.4 seconds and wins at 597.4 seconds. That run's echo was one heavy and one imp, in the trap style, not the capped wave. Placeholder shapes, not final art. No networking yet.
+> **Status: M5 (Lucifer Phase) on the M4 director.** The director spends Dark through the same `submit()` path a human demon will use. Priority is Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. On a march that is already over the line, that spend happens before the next punish, so a cooldown cannot refill the bank. Swarms are always available. Heavies unlock after 2 rooms cleared. The one elite (Teleporter and Molten) unlocks after 4, and committing it spends Dark immediately and shows a 3-second cast bar before the unit exists. Reinforcements go into the next room, not the one being fought. Spike, snare, and hellflame are laid ahead, two to a room, and stay hidden until Azrael's aura or Detect. A trap cluster is committed the same way as the elite. Silence, Rot, and Mark each show a cast bar before they land. Entering the throne — or an early descent in the sanctum — transforms the demon lord. The rise is a 3-second tell. Then Lucifer's four buttons (hell rain, cleave, judgment, grasp) are commands on that same path, each marked for 3 seconds. The echo is shaped by the siege's trap, summon, and curse counts: a trap-heavy run keeps a heavy and lays echo traps, a summon-heavy run sends a bigger wave, a curse-heavy run leans on Judgment, and an early transform spends less Dark for a weaker Lucifer and a thinner echo. On the current tune a scripted competent party reaches Lucifer at 499.4 seconds and wins at 617.1 seconds. The boss is 117.8 seconds. That run's echo was one heavy, trap style, with two echo traps — not the capped wave. Placeholder shapes, not final art. No networking yet.
 
 ---
 
@@ -42,7 +42,7 @@ Each stage has a stake, claimed by standing on the rear node for 10 seconds with
 | Wards | Cleansing Font | The next curse burns away on landing |
 | Sanctum | Reviving Altar | One revive, spent automatically on the next death |
 
-Idling in a cleared room, a fork, or a stake you are not channeling feeds the demon. Entering the throne makes the director descend. Lucifer's pattern and the one echo wave follow what the demon spent during the crawl. New curses stop. The trap cap drops. Killing Lucifer wins; a full wipe loses.
+Idling in a cleared room, a fork, or a stake you are not channeling feeds the demon. Entering the throne transforms the demon lord. A wounded party in the sanctum, with the altar still unclaimed, can draw him early: less Dark spent, less Lucifer, a thinner echo. The rise is marked for 3 seconds. Then the four blows, each marked for 3 seconds: hell rain on the tiles you are standing on (move, or Scatter Roll), a cleave lane (leave it), Judgment on the lowest angel (body-block or shield), and a Grasp the Phalanx refuses. Planted traps still fire. One echo wave arrives on a timer, spawning in for 3 seconds. Echo traps arm on a tell and can be disarmed before they do. No new curses. No new elite affixes. The trap cap drops. Killing Lucifer wins; a full party of final deaths loses.
 
 Elixir is milli-units per tick (20 ticks a second), and the step up gets larger each stage:
 
@@ -63,7 +63,7 @@ godot --headless --path . --import
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 44 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, altar revive, the length of the road, director decisions (rooms-gated tiers, reinforcing the next room, commitment and curse telegraphs, Dark spent on a march), and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at 499.4 seconds and wins at 597.4 seconds. The boss lasts 98.0 seconds. The empty road, stakes included and no demon, is 425.5 seconds and 1280 tiles.
+`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 52 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, the Lucifer transformation, the four telegraphed boss buttons and the kit answers to them, the echo reflecting a trap siege versus a summon siege versus an early transform, the early-descent tradeoff, one echo wave with planted traps still firing, altar revive, the length of the road, director decisions (rooms-gated tiers, reinforcing the next room, commitment and curse telegraphs, Dark spent on a march, the early-descent gamble), and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at 499.4 seconds and wins at 617.1 seconds. The boss lasts 117.8 seconds. The empty road, stakes included and no demon, is 425.5 seconds and 1280 tiles.
 
 ---
 
@@ -85,7 +85,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `0.5.0` (versionCode `6`)
+- App name: `Celestial Q Siege`, version `0.6.0` (versionCode `7`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
@@ -118,8 +118,10 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Portrait inspect is view state. It does not change the sim.
 - Detect is a paid wide pulse, and the same button disarms a revealed trap in range.
 - The Dark bar is visible here so the solo lab is readable. A real 1v1 would hide it.
-- Pacing target is 8–12 minutes. The scripted party hits 597.4 seconds: 499.4 seconds of crawl, 98.0 seconds of Lucifer. The marches are the long part; room fights add the rest.
-- The director spends Dark on the march (the next room, traps ahead, curses) down toward a per-stage line. The echo is whatever Dark is still banked when Lucifer descends, so a siege that spent on traps does not pay the capped wave. On this tune the healthy scripted run echoed one heavy and one imp, and the history was traps (65 placed, 10 summons, 27 curses).
+- Pacing target is 8–12 minutes. The scripted party hits 617.1 seconds: 499.4 seconds of crawl, 117.8 seconds of Lucifer. The marches are the long part. The boss is the climax, about two minutes.
+- The director spends Dark on the march (the next room, traps ahead, curses) down toward a per-stage line. The echo is that history, not the cap. Trap-heavy keeps a single heavy and lays echo traps (cap 3, still under the dungeon cap of 4). Summon-heavy adds bodies up to the mob cap. Curse-heavy swings the button pattern toward Judgment and does not cast new curses. Early descent spends 60% of the bank and brings the 2100-health Lucifer. On this tune the healthy scripted run was traps (65 placed, 10 summons, 27 curses) and echoed one heavy plus two echo traps.
+- Lucifer's buttons are `submit("boss")` commands. The rise is `submit("descend")`. A future human demon issues those same commands. The director only chooses which button, from the pattern the history picked.
+- Scatter Roll holds the shove for 3.5 seconds, long enough to stay out of a 3-second hell rain. Phalanx refuses Grasp. Body-block catches Judgment. None of the four blows kills a healthy angel by itself.
 - Traps the party has already walked past do not keep occupying the global cap of 4. The live cap is the current room plus rooms not yet entered, and each room still holds at most 2.
 - The Gate Seal locks swarm summons. The Cleansing Font stores one auto-cleanse. The altar is still the revive.
 - Uriel's beam locks a target until you drag (or tap) to steer the line. An unsteered beam stays single-target.

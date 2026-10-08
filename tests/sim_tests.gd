@@ -24,6 +24,14 @@ func run_all() -> int:
 		"test_turtle_corruption",
 		"test_echo_budget_scales_with_hp",
 		"test_echo_rejects_new_curses_and_affixes",
+		"test_lucifer_transforms_before_buttons",
+		"test_boss_buttons_are_telegraphed_and_answerable",
+		"test_echo_reflects_run_history",
+		"test_early_descent_is_a_weaker_echo",
+		"test_director_takes_the_early_descent_gamble",
+		"test_echo_one_wave_and_planted_traps_fire",
+		"test_boss_commands_are_deterministic",
+		"test_scene_lucifer_tells",
 		"test_altar_revive_and_wipe_and_win",
 		"test_gabriel_aura",
 		"test_michael_kit",
@@ -434,6 +442,439 @@ func test_echo_rejects_new_curses_and_affixes() -> void:
 		fail("echo elite kept affixes %s" % str(elite.affixes))
 	if before < 0:
 		fail("unused")
+
+
+func test_lucifer_transforms_before_buttons() -> void:
+	var sim := _descend_with_hp(100, 6000, false)
+	if sim.phase != "lucifer":
+		fail("descend did not open the lucifer phase")
+		return
+	if sim._boss().is_empty():
+		fail("lucifer was not on the board during the rise")
+		return
+	var remain := sim.transform_until - sim.tick
+	if remain < 55:
+		fail("transformation tell is %d ticks" % remain)
+	var hp_before := _party_hp(sim)
+	sim.submit("boss", {"button": "judgment"}, "demon", 1)
+	sim.tick_once()
+	if not sim.telegraph.is_empty():
+		fail("a boss button opened during the transformation")
+	if sim.legal_boss("cleave") != "transform":
+		fail("legal_boss during the rise: %s" % sim.legal_boss("cleave"))
+	while sim.tick < sim.transform_until:
+		sim.tick_once()
+	if _party_hp(sim) != hp_before:
+		fail("the rise dealt damage %d -> %d" % [hp_before, _party_hp(sim)])
+	sim.submit("boss", {"button": "hell_rain"}, "demon", 1)
+	sim.tick_once()
+	if str(sim.telegraph.get("name", "")) != "hell_rain":
+		fail("hell rain did not open after the rise")
+		return
+	var tell := int(sim.telegraph.until) - sim.tick
+	if tell < Balance.BOSS_TELL - 1:
+		fail("hell rain tell is %d ticks" % tell)
+	var marked := _party_hp(sim)
+	while sim.tick < int(sim.telegraph.until) - 1:
+		sim.tick_once()
+	if _party_hp(sim) != marked:
+		fail("hell rain dealt damage before the tell ended")
+
+
+func test_boss_buttons_are_telegraphed_and_answerable() -> void:
+	# Hell rain: the marked tile is the hit. Stepping out is the answer.
+	var rain := _descend_with_hp(100, 4000, false)
+	_wait_boss_ready(rain)
+	rain.submit("boss", {"button": "hell_rain"}, "demon", 1)
+	rain.tick_once()
+	if str(rain.telegraph.get("name", "")) != "hell_rain" or rain.hell_rain_marks.size() < 5:
+		fail("hell rain did not mark the party")
+		return
+	rain.root_until = rain.tick + 200
+	var stayer: Dictionary = rain._hero("gabriel")
+	var mover: Dictionary = rain._hero("uriel")
+	var stay_hp := int(stayer.hp)
+	var move_hp := int(mover.hp)
+	for mark in rain.hell_rain_marks:
+		if int(mark.id) == int(mover.id):
+			mover.pos = mark.pos + Vector2i(4000, 0)
+	while not rain.telegraph.is_empty():
+		rain.tick_once()
+	if int(stayer.hp) >= stay_hp:
+		fail("hell rain missed the angel who stayed in the mark")
+	if int(mover.hp) < move_hp:
+		fail("hell rain hit the angel who left the mark")
+	if not stayer.alive:
+		fail("hell rain killed from full health")
+	# Scatter Roll is the same answer without a manual reposition.
+	var rolled := _descend_with_hp(100, 4000, false)
+	_wait_boss_ready(rolled)
+	rolled.submit("boss", {"button": "hell_rain"}, "demon", 1)
+	rolled.tick_once()
+	var taken := int(rolled.stats.damage_taken)
+	rolled.submit("scatter", {})
+	rolled.tick_once()
+	while not rolled.telegraph.is_empty():
+		rolled.tick_once()
+	if int(rolled.stats.damage_taken) > taken:
+		fail("scatter did not clear hell rain")
+	# Cleave: the lane is locked when the tell opens.
+	var cleave := _descend_with_hp(100, 4000, false)
+	_wait_boss_ready(cleave)
+	cleave.submit("boss", {"button": "cleave"}, "demon", 1)
+	cleave.tick_once()
+	if int(cleave.telegraph.until) - cleave.tick < Balance.BOSS_TELL - 1:
+		fail("cleave tell is short")
+	var origin: Vector2i = cleave.telegraph.from
+	var end: Vector2i = cleave.telegraph.end
+	var mid := Vector2i((origin.x + end.x) / 2, (origin.y + end.y) / 2)
+	cleave.root_until = cleave.tick + 200
+	var on_lane: Dictionary = cleave._hero("michael")
+	var off_lane: Dictionary = cleave._hero("gabriel")
+	on_lane.pos = mid
+	off_lane.pos = mid + Vector2i(0, 4000)
+	var on_hp := int(on_lane.hp)
+	var off_hp := int(off_lane.hp)
+	while not cleave.telegraph.is_empty():
+		cleave.tick_once()
+	if int(on_lane.hp) >= on_hp:
+		fail("cleave missed the angel in the lane")
+	if int(off_lane.hp) < off_hp:
+		fail("cleave hit the angel who left the lane")
+	if not on_lane.alive:
+		fail("cleave killed from full health")
+	# Judgment: single target, body-block answers it, full health survives.
+	var judge := _descend_with_hp(100, 4000, false)
+	_wait_boss_ready(judge)
+	var gabriel: Dictionary = judge._hero("gabriel")
+	gabriel.hp = 90
+	judge.submit("boss", {"button": "judgment"}, "demon", 1)
+	judge.tick_once()
+	if int(judge.telegraph.get("target", 0)) != int(gabriel.id):
+		fail("judgment did not mark the lowest angel")
+	judge.golden = 8000
+	judge.submit("ability", {"name": "body_block"})
+	judge.tick_once()
+	var g_hp := int(gabriel.hp)
+	var m_hp := int(judge._hero("michael").hp)
+	while not judge.telegraph.is_empty():
+		judge.tick_once()
+	if int(gabriel.hp) != g_hp:
+		fail("body-block did not catch judgment")
+	if int(judge._hero("michael").hp) >= m_hp:
+		fail("michael did not take the blocked judgment")
+	if not judge._hero("michael").alive:
+		fail("judgment killed through michael")
+	var naked := _descend_with_hp(100, 4000, false)
+	_wait_boss_ready(naked)
+	naked.submit("boss", {"button": "judgment"}, "demon", 1)
+	naked.tick_once()
+	var victim := naked._ent(int(naked.telegraph.get("target", 0)))
+	while not naked.telegraph.is_empty():
+		naked.tick_once()
+	if victim.is_empty() or not victim.alive:
+		fail("judgment deleted a full-health angel")
+	# Grasp: Phalanx refuses the pull and keeps more health.
+	var pulled := _descend_with_hp(100, 4000, false)
+	var held := _descend_with_hp(100, 4000, false)
+	_wait_boss_ready(pulled)
+	_wait_boss_ready(held)
+	pulled.submit("boss", {"button": "grasp"}, "demon", 1)
+	held.submit("boss", {"button": "grasp"}, "demon", 1)
+	pulled.tick_once()
+	held.tick_once()
+	pulled.root_until = pulled.tick + 200
+	held.root_until = held.tick + 200
+	held.submit("phalanx", {})
+	held.tick_once()
+	var p0 := int(Fixed.dist(pulled._hero("gabriel").pos, pulled._boss().pos))
+	var h0 := int(Fixed.dist(held._hero("gabriel").pos, held._boss().pos))
+	var p_taken := int(pulled.stats.damage_taken)
+	var h_taken := int(held.stats.damage_taken)
+	while not pulled.telegraph.is_empty():
+		pulled.tick_once()
+	while not held.telegraph.is_empty():
+		held.tick_once()
+	var p1 := int(Fixed.dist(pulled._hero("gabriel").pos, pulled._boss().pos))
+	var h1 := int(Fixed.dist(held._hero("gabriel").pos, held._boss().pos))
+	if p0 - p1 < 800:
+		fail("grasp pull was %d" % (p0 - p1))
+	if h0 - h1 > 400:
+		fail("phalanx was pulled %d" % (h0 - h1))
+	if int(held.stats.damage_taken) - h_taken >= int(pulled.stats.damage_taken) - p_taken:
+		fail("phalanx did not soften grasp")
+
+
+func test_echo_reflects_run_history() -> void:
+	var trap := _history_descend(16, 2, 2, 8000, 100, false)
+	var summon := _history_descend(2, 15, 2, 8000, 100, false)
+	var curse := _history_descend(2, 2, 12, 8000, 100, false)
+	var early := _history_descend(2, 15, 2, 8000, 100, true)
+	if trap.echo_style != "traps" or summon.echo_style != "summons" or curse.echo_style != "curses":
+		fail("styles trap=%s summon=%s curse=%s" % [trap.echo_style, summon.echo_style, curse.echo_style])
+	if summon.echo_units.size() <= trap.echo_units.size():
+		fail("summon wave %s was not bigger than trap wave %s" % [str(summon.echo_units), str(trap.echo_units)])
+	if trap.echo_traps <= summon.echo_traps:
+		fail("trap echo laid %d traps, summon laid %d" % [trap.echo_traps, summon.echo_traps])
+	if trap.trap_cap <= summon.trap_cap:
+		fail("trap cap %d was not higher than summon cap %d" % [trap.trap_cap, summon.trap_cap])
+	if summon.trap_cap != Balance.ECHO_TRAP_CAP:
+		fail("summon echo did not cut the trap cap")
+	if _pattern_count(curse.lucifer_pattern, "judgment") <= _pattern_count(summon.lucifer_pattern, "judgment"):
+		fail("curse pattern %s was not more judgment than %s" % [str(curse.lucifer_pattern), str(summon.lucifer_pattern)])
+	if curse.echo_traps != 0:
+		fail("curse echo laid traps")
+	if early.echo_units.size() >= summon.echo_units.size():
+		fail("early summon wave %s was not weaker than %s" % [str(early.echo_units), str(summon.echo_units)])
+	if int(early._boss().hp_max) >= int(summon._boss().hp_max):
+		fail("early lucifer was not weaker")
+	if early.echo_spent >= summon.echo_spent:
+		fail("early descent spent %d vs %d" % [early.echo_spent, summon.echo_spent])
+	if summon.echo_units.size() > Balance.MOB_CAP:
+		fail("summon echo was the uncapped wave %s" % str(summon.echo_units))
+	print("  echoes trap=%s traps=%d | summon=%s | curse=%s | early=%s spent %d/%d" % [
+		str(trap.echo_units), trap.echo_traps, str(summon.echo_units), str(curse.lucifer_pattern),
+		str(early.echo_units), early.echo_spent, summon.echo_spent,
+	])
+	# Same planted set: a trap siege keeps a trappier field than a summon siege.
+	var planted_trap := _plant_four()
+	planted_trap.traps_placed = 16
+	planted_trap.spawns_placed = 2
+	planted_trap.curses_cast = 2
+	planted_trap.dark = 8000
+	planted_trap.submit("descend", {"early": false}, "demon", 1)
+	var planted_summon := _plant_four()
+	planted_summon.traps_placed = 2
+	planted_summon.spawns_placed = 15
+	planted_summon.curses_cast = 2
+	planted_summon.dark = 8000
+	planted_summon.submit("descend", {"early": false}, "demon", 1)
+	for _i in 220:
+		planted_trap.tick_once()
+		planted_summon.tick_once()
+	var trap_armed := _armed_count(planted_trap)
+	var summon_armed := _armed_count(planted_summon)
+	if trap_armed <= summon_armed:
+		fail("planted field trap %d was not trappier than summon %d" % [trap_armed, summon_armed])
+
+
+func test_early_descent_is_a_weaker_echo() -> void:
+	var late := _history_descend(16, 2, 2, 8000, 100, false)
+	var early := _history_descend(16, 2, 2, 8000, 100, true)
+	if int(early._boss().hp_max) != Balance.LUCIFER_HP_EARLY:
+		fail("early hp %s" % str(early._boss().get("hp_max", 0)))
+	if int(late._boss().hp_max) != Balance.LUCIFER_HP:
+		fail("late hp %s" % str(late._boss().get("hp_max", 0)))
+	if early.echo_units.size() >= late.echo_units.size() and early.echo_traps >= late.echo_traps:
+		fail("early echo was not weaker units %s/%s traps %d/%d" % [
+			str(early.echo_units), str(late.echo_units), early.echo_traps, late.echo_traps,
+		])
+	if early.echo_spent >= late.echo_spent:
+		fail("early spent %d late spent %d" % [early.echo_spent, late.echo_spent])
+	print("  early-descent units %s traps %d spent %d | late units %s traps %d spent %d" % [
+		str(early.echo_units), early.echo_traps, early.echo_spent,
+		str(late.echo_units), late.echo_traps, late.echo_spent,
+	])
+
+
+func test_director_takes_the_early_descent_gamble() -> void:
+	var sim := CombatSim.new()
+	_stand(sim, "gallery3")
+	sim.stage_reached = 2
+	sim.rooms_cleared = Balance.ELITE_ROOMS
+	sim.altar_done = false
+	sim.seal_done = true
+	sim.font_done = true
+	sim.dark = 5000
+	sim.golden = 9000
+	for a in sim._angels():
+		a.hp = maxi(1, int(a.hp_max) * 40 / 100)
+	_ready_director(sim)
+	var ticks := 0
+	while sim.phase != "lucifer" and ticks < 40:
+		sim.tick_once()
+		ticks += 1
+	if not sim.early_descend:
+		fail("wounded sanctum party did not draw an early descent: %s" % sim.debug_string())
+		return
+	if int(sim._boss().hp_max) != Balance.LUCIFER_HP_EARLY:
+		fail("early gamble spawned a full lucifer")
+	var late := CombatSim.new()
+	late.director_enabled = false
+	late.dark = 5000
+	late.traps_placed = sim.traps_placed
+	late.spawns_placed = sim.spawns_placed
+	late.curses_cast = sim.curses_cast
+	for b in late._angels():
+		b.hp = maxi(1, int(b.hp_max) * 40 / 100)
+	late.submit("descend", {"early": false}, "demon", 1)
+	late.tick_once()
+	if sim.echo_spent >= late.echo_spent:
+		fail("gamble spent %d vs a prepared %d" % [sim.echo_spent, late.echo_spent])
+	if sim.echo_units.size() > late.echo_units.size():
+		fail("gamble wave %s beat the prepared wave %s" % [str(sim.echo_units), str(late.echo_units)])
+
+
+func test_echo_one_wave_and_planted_traps_fire() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	sim.submit("trap", {"kind": "spike", "node": "trapped:choke"}, "demon", 1)
+	sim.tick_once()
+	var spike := _find_kind(sim, "trap")
+	if spike.is_empty():
+		fail("spike was not planted")
+		return
+	sim.dark = 8000
+	for a in sim._angels():
+		a.atk = 0
+	sim.submit("descend", {"early": false}, "demon", 1)
+	sim.tick_once()
+	if not bool(spike.get("armed", false)):
+		fail("the planted spike was removed by the descent")
+	var scheduled := 0
+	for c in sim.queue:
+		if str(c.type) == "spawn":
+			scheduled += 1
+	if scheduled != sim.echo_units.size() or scheduled < 1:
+		fail("wave scheduled %d units from %s" % [scheduled, str(sim.echo_units)])
+	var guard := 0
+	while sim._command_pending("spawn") and guard < 400:
+		sim.tick_once()
+		guard += 1
+	if sim.mob_count() != scheduled:
+		fail("one wave produced %d mobs from %d spawns" % [sim.mob_count(), scheduled])
+	var mobs := sim.mob_count()
+	for _i in 30:
+		sim.tick_once()
+	if sim.mob_count() != mobs:
+		fail("a second wave arrived")
+	if sim._command_pending("spawn"):
+		fail("spawn commands remained after the one wave")
+	sim.submit("curse", {"kind": "silence", "target": "raphael"}, "demon", 1)
+	sim.tick_once()
+	if int(sim._hero("raphael").silence_until) > sim.tick:
+		fail("the echo accepted a new curse")
+	sim.root_until = sim.tick + 10
+	sim.anchor = spike.pos
+	for angel in sim._angels():
+		angel.pos = spike.pos
+	var tripped := int(sim.stats.traps_triggered)
+	sim.tick_once()
+	if int(sim.stats.traps_triggered) <= tripped:
+		fail("planted spike did not fire during the echo")
+
+
+func test_boss_commands_are_deterministic() -> void:
+	var a := _history_descend(9, 6, 3, 7000, 90, false)
+	var b := _history_descend(9, 6, 3, 7000, 90, false)
+	_wait_boss_ready(a)
+	_wait_boss_ready(b)
+	for button in ["hell_rain", "cleave", "judgment", "grasp"]:
+		a.submit("boss", {"button": button}, "demon", 1)
+		b.submit("boss", {"button": button}, "demon", 1)
+		for _i in Balance.BOSS_TELL + Balance.BOSS_GAP + 2:
+			a.tick_once()
+			b.tick_once()
+			if a.checksum() != b.checksum():
+				fail("boss commands diverged on %s" % button)
+				return
+
+
+func test_scene_lucifer_tells() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.paused = true
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.sim.dark = 8000
+	game.sim.traps_placed = 16
+	game.sim.spawns_placed = 2
+	game.sim.curses_cast = 2
+	game.sim.submit("descend", {"early": false}, "demon", 1)
+	game.sim.tick_once()
+	game._process(0.0)
+	game.board._process(0.0)
+	if not game.hud._boss.visible:
+		fail("boss hp bar hidden during the transformation")
+		game.queue_free()
+		return
+	if int(game.hud._boss.max_value) != int(game.board.snap.boss_hp_max) or int(game.hud._boss.value) != int(game.board.snap.boss_hp):
+		fail("boss bar does not match the sim")
+		game.queue_free()
+		return
+	if not str(game.hud._boss_l.text).contains("Transforms"):
+		fail("transform tell read %s" % game.hud._boss_l.text)
+		game.queue_free()
+		return
+	game.board.notification(CanvasItem.NOTIFICATION_DRAW)
+	while game.sim.tick < game.sim.transform_until:
+		game.sim.tick_once()
+	game.sim.submit("boss", {"button": "cleave"}, "demon", 1)
+	game.sim.tick_once()
+	game._process(0.0)
+	game.board._process(0.0)
+	game.board.notification(CanvasItem.NOTIFICATION_DRAW)
+	if str(game.board.snap.telegraph.get("name", "")) != "cleave":
+		fail("cleave tell was not on the snapshot")
+		game.queue_free()
+		return
+	if not str(game.hud._boss_l.text).contains("cleave"):
+		fail("hud tell read %s" % game.hud._boss_l.text)
+		game.queue_free()
+		return
+	var guard := 0
+	while game.sim.count_subtype("heavy") + game.sim.count_subtype("imp") < 1 and guard < 400:
+		game.sim.tick_once()
+		guard += 1
+	game._process(0.0)
+	game.board._process(0.0)
+	game.board.notification(CanvasItem.NOTIFICATION_DRAW)
+	var echo_seen := false
+	for foe in game.board.snap.foes:
+		if str(foe.subtype) == "heavy" or str(foe.subtype) == "imp":
+			echo_seen = true
+	if not echo_seen:
+		fail("echo wave was not on the board")
+		game.queue_free()
+		return
+	var lucifer := {}
+	for foe2 in game.board.snap.foes:
+		if str(foe2.subtype) == "lucifer":
+			lucifer = foe2
+	if lucifer.is_empty():
+		fail("lucifer left the board")
+		game.queue_free()
+		return
+	game._tap_frame = -1
+	var touch := InputEventScreenTouch.new()
+	touch.pressed = true
+	touch.index = 0
+	touch.position = game.board._milli_screen(lucifer.pos)
+	var queued := game.sim.queue.size()
+	game._unhandled_input(touch)
+	if game.sim.queue.size() <= queued or str(game.sim.queue.back().type) != "focus":
+		fail("tap did not focus lucifer")
+		game.queue_free()
+		return
+	game.sim.golden = 8000
+	game.hud._bar.shield.pressed.emit()
+	game.sim.tick_once()
+	if game.sim.shield_wall_until <= game.sim.tick:
+		fail("shield did not answer during the lucifer phase")
+	game.queue_free()
 
 
 func test_altar_revive_and_wipe_and_win() -> void:
@@ -849,8 +1290,8 @@ func test_competent_policy_can_win() -> void:
 		fail("full run %0.1fs is past the 8–12 minute band" % total_s)
 	if boss_s >= crawl_s:
 		fail("boss %0.1fs lasted as long as the crawl %0.1fs" % [boss_s, crawl_s])
-	if boss_s < 60.0:
-		fail("boss ended in %0.1fs — not a climax" % boss_s)
+	if boss_s < 90.0 or boss_s > 130.0:
+		fail("boss %0.1fs is outside the 1.5–2 min climax" % boss_s)
 	if not bool(sim.visited.get("throne", false)):
 		fail("won without reaching the throne")
 
@@ -2006,6 +2447,67 @@ func _descend_with_hp(pct: int, bank: int, early: bool) -> CombatSim:
 	sim.submit("descend", {"early": early}, "demon", 1)
 	sim.tick_once()
 	return sim
+
+
+func _history_descend(traps: int, spawns: int, curses: int, bank: int, pct: int, early: bool) -> CombatSim:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	for a in sim._angels():
+		a.hp = maxi(1, int(a.hp_max) * pct / 100)
+	sim.dark = bank
+	sim.traps_placed = traps
+	sim.spawns_placed = spawns
+	sim.curses_cast = curses
+	sim.submit("descend", {"early": early}, "demon", 1)
+	sim.tick_once()
+	return sim
+
+
+func _wait_boss_ready(sim: CombatSim) -> void:
+	var guard := 0
+	while guard < 400:
+		if sim.tick >= sim.transform_until and sim.tick >= sim.lucifer_next and sim.telegraph.is_empty() and not sim._command_pending("boss"):
+			return
+		sim.tick_once()
+		guard += 1
+
+
+func _party_hp(sim: CombatSim) -> int:
+	var hp := 0
+	for a in sim._angels():
+		hp += int(a.hp)
+	return hp
+
+
+func _pattern_count(pattern: Array, name: String) -> int:
+	var n := 0
+	for step in pattern:
+		if str(step) == name:
+			n += 1
+	return n
+
+
+func _plant_four() -> CombatSim:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 10000
+	for a in sim._angels():
+		a.atk = 0
+	var nodes := ["trapped:choke", "trapped:center", "summoned:choke", "summoned:center"]
+	var kinds := ["spike", "snare", "spike", "hellflame"]
+	for i in nodes.size():
+		sim.submit("trap", {"kind": kinds[i], "node": nodes[i]}, "demon", 1)
+		sim.tick_once()
+	return sim
+
+
+func _armed_count(sim: CombatSim) -> int:
+	var n := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "trap" and bool(e.get("armed", false)):
+			n += 1
+	return n
 
 
 func _find_kind(sim, kind: String) -> Dictionary:

@@ -162,9 +162,17 @@ func _draw() -> void:
 		if not bool(trap.armed):
 			tc.a = 0.35
 		draw_rect(Rect2(c3 - Vector2(8, 8), Vector2(16, 16)), tc)
-		if font:
+		if bool(trap.get("echo", false)) and not bool(trap.armed):
+			var arm_at := int(trap.get("arm_at", 0))
+			var remain_a := maxi(0, arm_at - int(snap.tick))
+			var frac_a := 1.0 - float(remain_a) / float(maxi(Balance.BOSS_TELL, 1))
+			draw_arc(c3, 18.0, -PI * 0.5, -PI * 0.5 + TAU * frac_a, 20, Color(1.0, 0.55, 0.2), 3.0)
+			if font:
+				draw_string(font, c3 + Vector2(-28, -16), "echo %0.1fs" % (float(remain_a) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.7, 0.35))
+		elif font:
 			draw_string(font, c3 + Vector2(-18, 22), str(trap.subtype), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.95, 0.8))
 	_draw_kits(font)
+	_draw_transform(font)
 	_draw_telegraphs(font)
 	for foe in snap.foes:
 		_draw_unit(foe, _foe_color(str(foe.subtype)), font, true)
@@ -240,28 +248,54 @@ func _hero_pos(subtype: String) -> Vector2i:
 	return Vector2i.ZERO
 
 
+func _draw_transform(font) -> void:
+	if int(snap.get("transform_until", 0)) <= int(snap.tick):
+		return
+	var boss := _boss_pos()
+	if boss == Vector2i.ZERO:
+		return
+	var p := _milli_screen(boss)
+	var remain := maxi(0, int(snap.transform_until) - int(snap.tick))
+	var frac := 1.0 - float(remain) / float(maxi(Balance.TRANSFORM_CAST, 1))
+	draw_arc(p, 36.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 28, Color(0.95, 0.15, 0.2), 4.0)
+	draw_circle(p, 28.0, Color(0.7, 0.05, 0.08, 0.35))
+	if font:
+		draw_string(font, p + Vector2(-52, -42), "transforms %0.1fs" % (float(remain) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.55, 0.4))
+
+
 func _draw_telegraphs(font) -> void:
 	var tg: Dictionary = snap.telegraph
 	if tg.is_empty():
 		return
 	var name := str(tg.get("name", ""))
+	var boss := _boss_pos()
+	if boss != Vector2i.ZERO:
+		var remain_b := maxi(0, int(tg.get("until", 0)) - int(snap.tick))
+		var frac_b := 1.0 - float(remain_b) / float(maxi(Balance.BOSS_TELL, 1))
+		draw_arc(_milli_screen(boss), 34.0, -PI * 0.5, -PI * 0.5 + TAU * frac_b, 28, Color(1.0, 0.45, 0.15), 4.0)
 	if name == "hell_rain":
 		for mark in snap.hell_rain:
 			draw_circle(_milli_screen(mark.pos), Balance.HELL_RAIN_RADIUS / 1000.0 * TILE, Color(0.9, 0.2, 0.1, 0.25))
 	elif name == "cleave":
-		var boss := _boss_pos()
-		if boss != Vector2i.ZERO:
+		var origin: Vector2i = tg.get("from", boss)
+		var end: Vector2i = tg.get("end", Vector2i.ZERO)
+		if end == Vector2i.ZERO and origin != Vector2i.ZERO:
 			var aim: Vector2i = tg.get("aim", snap.anchor)
-			var end := Fixed.approach(boss, aim, Balance.CLEAVE_LENGTH)
-			draw_line(_milli_screen(boss), _milli_screen(end), Color(1, 0.35, 0.2, 0.7), 18.0)
+			end = Fixed.approach(origin, aim, Balance.CLEAVE_LENGTH)
+		if origin != Vector2i.ZERO and end != Vector2i.ZERO:
+			draw_line(_milli_screen(origin), _milli_screen(end), Color(1, 0.35, 0.2, 0.7), 18.0)
 	elif name == "judgment":
 		var tgt := _unit_pos(int(tg.get("target", 0)))
 		if tgt != Vector2i.ZERO:
 			draw_circle(_milli_screen(tgt), 28, Color(1, 0.85, 0.2, 0.35))
+			if boss != Vector2i.ZERO:
+				draw_line(_milli_screen(boss), _milli_screen(tgt), Color(1, 0.85, 0.2, 0.8), 2.0)
 	elif name == "grasp":
-		var boss2 := _boss_pos()
-		if boss2 != Vector2i.ZERO:
-			draw_circle(_milli_screen(boss2), 70, Color(0.6, 0.1, 0.2, 0.25))
+		if boss != Vector2i.ZERO:
+			draw_circle(_milli_screen(boss), 70, Color(0.6, 0.1, 0.2, 0.25))
+			for angel in snap.angels:
+				if bool(angel.alive):
+					draw_line(_milli_screen(boss), _milli_screen(angel.pos), Color(0.8, 0.15, 0.25, 0.55), 2.0)
 	if font:
 		var remain := maxi(0, int(tg.get("until", 0)) - int(snap.tick))
 		draw_string(font, Vector2(INSET_L + 12, INSET_T + 22), "%s  %0.1fs" % [name.replace("_", " "), float(remain) / 20.0], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 0.7, 0.45))
@@ -291,6 +325,8 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 	if font and (str(u.subtype) == "lucifer" or str(u.subtype) == "elite" or not foe):
 		var tag := str(u.name)[0] if not foe else str(u.subtype)
 		draw_string(font, p + Vector2(-4, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.05, 0.04, 0.08))
+	if foe and bool(u.get("spawning", false)) and font:
+		draw_string(font, p + Vector2(-16, 22), "echo", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.75, 0.45))
 
 
 func _room_color(kind: String, here: bool) -> Color:
