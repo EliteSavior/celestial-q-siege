@@ -51,6 +51,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		_key(event.keycode)
 		return
+	if event is InputEventScreenDrag:
+		board.handle_drag(event.position)
+		return
+	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		board.handle_drag(event.position)
+		return
 	var pos := Vector2.INF
 	if event is InputEventScreenTouch and event.pressed:
 		pos = event.position

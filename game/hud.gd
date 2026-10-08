@@ -19,6 +19,7 @@ var _boss: ProgressBar
 var _boss_l: Label
 var _pause: Button
 var _speed: Button
+var _passive: Label
 var _brief: Control
 var _end: Control
 var _end_label: Label
@@ -46,6 +47,8 @@ func build() -> void:
 	_boss_l = _label(Vector2(740, 76), "", 14)
 	_feed = _label(Vector2(520, 588), "", 14)
 	_feed.size = Vector2(520, 48)
+	_passive = _label(Vector2(210, 600), "", 13)
+	_passive.size = Vector2(500, 32)
 	_pause = _btn("Pause", Vector2(1060, 8), Vector2(90, 36), _on_pause)
 	_speed = _btn("1x", Vector2(1160, 8), Vector2(70, 36), _on_speed)
 	var names := ["Tight", "Spread", "Column"]
@@ -116,10 +119,12 @@ func refresh(snap: Dictionary) -> void:
 	_scatter.disabled = int(snap.scatter_cd) > 0
 	_phalanx.disabled = int(snap.phalanx_cd) > 0
 	if _inspect == "":
+		_passive.text = ""
 		for cmd in _bar.keys():
 			var info: Dictionary = snap.bar[cmd]
 			_apply_ability_button(_bar[cmd], info)
 	else:
+		_passive.text = _passive_line(_inspect)
 		var kit: Array = snap.kits[_inspect]
 		var i := 0
 		for cmd2 in ["shield", "heal", "cleanse", "detect", "burst"]:
@@ -146,6 +151,14 @@ func refresh(snap: Dictionary) -> void:
 			flags += " ROT"
 		if bool(hs.mark):
 			flags += " MARK"
+		if bool(hs.get("weaken", false)):
+			flags += " WEAK"
+		if int(hs.get("radiance", 0)) > 0:
+			flags += " R%d" % int(hs.radiance)
+		if int(hs.get("shield", 0)) > 0:
+			flags += " +%d" % int(hs.shield)
+		if str(hs.get("casting", "")) != "":
+			flags += " CAST"
 		if not bool(hs.alive):
 			btn3.text = "%s\nDOWN" % subtype.capitalize()
 		else:
@@ -188,7 +201,7 @@ func _build_brief() -> void:
 	_brief.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_brief)
 	var l := Label.new()
-	l.text = "Celestial Q Siege\n\nFive angels, one squad. Tap the ground or a doorway. A doorway commits you for 3 seconds.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column.\nScatter Roll and Phalanx Push are the reactions. Tap an enemy to focus.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
+	l.text = "Celestial Q Siege\n\nFive angels, one squad. Tap the ground or a doorway. A doorway commits you for 3 seconds.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column.\nScatter Roll and Phalanx Push are the reactions. Tap an enemy to focus.\nTap a portrait for that angel's three actives. Drag while Uriel's beam is up to steer it.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
 	l.position = Vector2(180, 70)
 	l.size = Vector2(920, 460)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -211,6 +224,22 @@ func _build_end() -> void:
 	_end_label.add_theme_font_size_override("font_size", 28)
 	_end.add_child(_end_label)
 	_btn("Run it again", Vector2(500, 500), Vector2(240, 60), _on_restart, _end)
+
+
+func _passive_line(subtype: String) -> String:
+	match subtype:
+		"michael":
+			return "Passive: highest HP, 25% less damage taken."
+		"raphael":
+			return "Passive: regenerates while he is not casting."
+		"azrael":
+			return "Passive: short aura that reveals nearby traps."
+		"uriel":
+			return "Passive: Radiance — attacks stack and boost the next holy zone."
+		"gabriel":
+			return "Passive: small damage aura for the whole party."
+		_:
+			return ""
 
 
 func _on_begin() -> void:
