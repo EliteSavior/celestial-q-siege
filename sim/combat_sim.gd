@@ -72,7 +72,9 @@ var rooms_cleared := 0
 var cleared := {}
 var visited := {}
 var shield_wall_until := 0
+var shield_wall_facing := Vector2i(1, 0)
 var taunt_until := 0
+var taunt_id := 0
 var root_until := 0
 var scatter_until := 0
 var iframe_until := 0
@@ -166,7 +168,9 @@ func reset() -> void:
 	cleared = {"start": true}
 	visited = {"start": true}
 	shield_wall_until = 0
+	shield_wall_facing = Vector2i(1, 0)
 	taunt_until = 0
+	taunt_id = 0
 	root_until = 0
 	scatter_until = 0
 	iframe_until = 0
@@ -286,9 +290,11 @@ func _exec(c: Dictionary) -> void:
 		"focus":
 			_cmd_focus(int(args.get("id", 0)))
 		"shield", "heal", "cleanse", "detect", "burst":
-			_cast(_route(type))
+			_cast(_route(type), args)
 		"ability":
-			_cast(str(args.get("name", "")))
+			_cast(str(args.get("name", "")), args)
+		"steer":
+			_cmd_steer(_vec(args.get("pos", Vector2i.ZERO)))
 		"scatter":
 			_cast_scatter()
 		"phalanx":
@@ -429,7 +435,7 @@ func _route(cmd: String) -> String:
 			return ""
 
 
-func _cast(ability: String) -> void:
+func _cast(ability: String, args: Dictionary = {}) -> void:
 	if ability == "":
 		return
 	var owner_name := Balance.owner_of(ability)
@@ -448,20 +454,29 @@ func _cast(ability: String) -> void:
 	if golden < price:
 		_fail("Not enough Golden Elixir.")
 		return
-	if not _apply_ability(ability, owner):
+	if not _apply_ability(ability, owner, args):
 		return
 	golden -= price
 	owner.cooldowns[ability] = tick + Balance.cooldown(ability)
 
 
-func _apply_ability(ability: String, owner: Dictionary) -> bool:
+func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -> bool:
 	match ability:
 		"taunt":
+			var pulled := _taunt_target()
+			if pulled.is_empty():
+				_fail("No one to taunt.")
+				return false
+			taunt_id = int(pulled.id)
 			taunt_until = tick + Balance.TAUNT_TICKS
-			_log("Michael taunts.", "good")
+			if pulled.get("blink", {}) is Dictionary and not pulled.blink.is_empty():
+				pulled.blink = {}
+				pulled.teleport_at = tick + Balance.BLINK_PERIOD
+			_log("Michael taunts %s." % pulled.name, "good")
 			return true
 		"shield_wall":
 			shield_wall_until = tick + Balance.SHIELD_WALL_TICKS
+			shield_wall_facing = facing
 			_log("Shield wall.", "good")
 			return true
 		"body_block":
@@ -469,25 +484,37 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			_log("Michael will intercept the next strike.", "good")
 			return true
 		"single_heal":
-			var tgt := _lowest_living()
+			var tgt := _named_angel(args, true)
+			if tgt.is_empty():
+				tgt = _lowest_living()
 			if tgt.is_empty():
 				_fail("No one to heal.")
 				return false
-			_heal(tgt, 62)
+			_heal(tgt, Balance.HEAL_SINGLE)
 			_log("Raphael heals %s." % tgt.name, "good")
 			return true
 		"party_heal":
+			var healed := 0
 			for a in _angels():
 				if a.alive:
-					_heal(a, 32)
+					_heal(a, Balance.HEAL_PARTY)
+					healed += 1
+			if healed == 0:
+				_fail("No one to heal.")
+				return false
 			_log("Raphael mends the party.", "good")
 			return true
 		"slow_revive":
-			var dead := _revive_target()
+			var dead := _named_angel(args, false)
+			if dead.is_empty():
+				dead = _revive_target()
+			elif bool(dead.get("final_death", false)):
+				_fail("Death is final.")
+				return false
 			if dead.is_empty():
 				_fail("Death is final." if _has_final_corpse() else "No one is down.")
 				return false
-			owner.casting = {"ability": "slow_revive", "until": tick + 60, "target": dead.id}
+			owner.casting = {"ability": "slow_revive", "until": tick + Balance.REVIVE_CHANNEL, "target": dead.id}
 			_log("Raphael begins a resurrection.", "good")
 			return true
 		"burst":
@@ -495,7 +522,7 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			if foe.is_empty() or Fixed.dist(owner.pos, foe.pos) > int(owner.range) + 150:
 				_fail("Burst has no target in reach.")
 				return false
-			_hurt(foe, _out_damage(74), "single", owner.id, false)
+			_hurt(foe, _out_damage(Balance.BURST_DMG, owner.id), "single", owner.id, false)
 			_log("Azrael bursts %s." % foe.name, "good")
 			return true
 		"disarm":
@@ -507,9 +534,8 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			_log("Azrael disarms a trap.", "good")
 			return true
 		"escape_dash":
-			owner.untargetable_until = tick + 30
-			var back := Fixed.rotate_facing(Vector2i(-1600, 0), facing)
-			owner.pos = _clamp_pos(anchor + back)
+			owner.untargetable_until = tick + Balance.DASH_TICKS
+			owner.pos = _dash_landing(owner.pos)
 			_log("Azrael slips the line.", "good")
 			return true
 		"detect_pulse":
@@ -517,44 +543,70 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			_log("Detect pulse reveals %d trap%s." % [n, "" if n == 1 else "s"], "info")
 			return true
 		"beam":
+			var aim := _vec(args.get("pos", Vector2i.ZERO))
 			var foe2 := _focus_or_nearest(owner)
-			if foe2.is_empty():
-				_fail("Beam has no target.")
-				return false
-			owner.casting = {"ability": "beam", "until": tick + 24, "next": tick + 8, "pulses": 3, "target": foe2.id}
+			if aim == Vector2i.ZERO:
+				if foe2.is_empty():
+					_fail("Beam has no target.")
+					return false
+				aim = foe2.pos
+			owner.casting = {
+				"ability": "beam",
+				"until": tick + Balance.BEAM_TICKS,
+				"next": tick + Balance.BEAM_PULSE,
+				"pulses": Balance.BEAM_PULSES,
+				"target": foe2.id if not foe2.is_empty() else 0,
+				"aim": aim,
+				"steered": _vec(args.get("pos", Vector2i.ZERO)) != Vector2i.ZERO,
+			}
 			_log("Uriel's beam locks on.", "good")
 			return true
 		"aoe_zone":
-			var spot := _cluster_point(owner)
-			if spot == Vector2i.ZERO and _living_mobs().is_empty():
+			var spot := _vec(args.get("pos", Vector2i.ZERO))
+			if spot == Vector2i.ZERO:
+				spot = _cluster_point(owner)
+			if spot == Vector2i.ZERO:
 				_fail("No one to burn.")
 				return false
 			var stacks := int(owner.radiance)
 			owner.radiance = 0
-			_add_zone(spot, Balance.HELLFLAME_RADIUS, 60, 9, "holy", stacks)
+			_add_zone(spot, Balance.HELLFLAME_RADIUS, Balance.HOLY_ZONE_TICKS, Balance.HOLY_ZONE_DMG, "holy", stacks)
 			_log("Holy zone (Radiance %d)." % stacks, "good")
 			return true
 		"disengage":
-			var back2 := Fixed.rotate_facing(Vector2i(-2500, 0), facing)
-			anchor = _clamp_pos(anchor + back2)
+			var delta := _retreat_delta()
+			if delta == Vector2i.ZERO:
+				_fail("Nowhere to disengage.")
+				return false
+			anchor = _clamp_pos(anchor + delta)
+			for ally in _angels():
+				if ally.alive:
+					var landed: Vector2i = ally.pos + delta
+					ally.pos = landed if _walkable_pos(landed) else _clamp_pos(landed)
 			path = []
 			move_goal_room = ""
-			disengage_until = tick + 30
+			move_goal_tile = Vector2i(-1, -1)
+			disengage_until = tick + Balance.DISENGAGE_TICKS
 			channeling_altar = false
 			_log("The squad disengages.", "good")
 			return true
 		"cleanse":
 			return _do_cleanse()
 		"self_shield":
-			owner.shield += 55
+			owner.shield += Balance.SELF_SHIELD
 			_log("Gabriel shields himself.", "good")
 			return true
 		"emergency_res":
-			var dead2 := _revive_target()
+			var dead2 := _named_angel(args, false)
+			if dead2.is_empty():
+				dead2 = _revive_target()
+			elif bool(dead2.get("final_death", false)):
+				_fail("Death is final.")
+				return false
 			if dead2.is_empty():
 				_fail("Death is final." if _has_final_corpse() else "No one is down.")
 				return false
-			if not _revive(dead2, 25):
+			if not _revive(dead2, Balance.EMERGENCY_PCT):
 				_fail("Death is final.")
 				return false
 			_log("Gabriel forces %s back." % dead2.name, "good")
@@ -564,25 +616,45 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			return false
 
 
+func _cmd_steer(pos: Vector2i) -> void:
+	if pos == Vector2i.ZERO:
+		return
+	var uriel := _hero("uriel")
+	if uriel.is_empty() or uriel.casting.is_empty():
+		return
+	if str(uriel.casting.get("ability", "")) != "beam":
+		return
+	uriel.casting.aim = pos
+	uriel.casting.steered = true
+	uriel.casting.target = 0
+
+
 func _do_cleanse() -> bool:
+	# One debuff per cast. Silence, then Rot, then Mark, then Weaken.
 	var best: Dictionary = {}
 	var best_pri := 0
 	var best_kind := ""
 	for a in _angels():
 		if not a.alive:
 			continue
-		if int(a.silence_until) > tick and best_pri < 3:
+		var kind := ""
+		var pri := 0
+		if int(a.silence_until) > tick:
+			kind = "silence"
+			pri = 4
+		elif int(a.rot_until) > tick:
+			kind = "rot"
+			pri = 3
+		elif int(a.mark_until) > tick:
+			kind = "mark"
+			pri = 2
+		elif int(a.get("weaken_until", 0)) > tick:
+			kind = "weaken"
+			pri = 1
+		if pri > best_pri:
 			best = a
-			best_pri = 3
-			best_kind = "silence"
-		elif int(a.rot_until) > tick and best_pri < 2:
-			best = a
-			best_pri = 2
-			best_kind = "rot"
-		elif int(a.mark_until) > tick and best_pri < 1:
-			best = a
-			best_pri = 1
-			best_kind = "mark"
+			best_pri = pri
+			best_kind = kind
 	if best.is_empty():
 		_fail("Nothing to cleanse.")
 		return false
@@ -590,12 +662,85 @@ func _do_cleanse() -> bool:
 		best.silence_until = 0
 	elif best_kind == "rot":
 		best.rot_until = 0
-	else:
+	elif best_kind == "mark":
 		best.mark_until = 0
+	else:
+		best.weaken_until = 0
 	stats.curses_cleansed += 1
 	_grant_golden(Balance.CLEANSE_BOUNTY, party_room_id)
 	_log("Gabriel cleanses %s from %s." % [best_kind, best.name], "good")
 	return true
+
+
+func _named_angel(args: Dictionary, must_live: bool) -> Dictionary:
+	var name := str(args.get("target", ""))
+	if name == "":
+		return {}
+	var hero := _hero(name)
+	if hero.is_empty():
+		return {}
+	if must_live and not hero.alive:
+		return {}
+	if not must_live and hero.alive:
+		return {}
+	return hero
+
+
+func _taunt_target() -> Dictionary:
+	var michael := _hero("michael")
+	if michael.is_empty() or not michael.alive:
+		return {}
+	if focus_id != 0 and focus_until > tick:
+		var focused := _ent(focus_id)
+		if _tauntable(focused) and Fixed.dist(michael.pos, focused.pos) <= Balance.TAUNT_RADIUS:
+			return focused
+	var back := _lowest_backline()
+	var best: Dictionary = {}
+	var best_d := 1 << 30
+	for m in _living_mobs():
+		if not _tauntable(m):
+			continue
+		if Fixed.dist(michael.pos, m.pos) > Balance.TAUNT_RADIUS:
+			continue
+		var d := Fixed.dist(m.pos, back.pos) if not back.is_empty() else Fixed.dist(m.pos, michael.pos)
+		if d < best_d or (d == best_d and not best.is_empty() and int(m.id) < int(best.id)):
+			best = m
+			best_d = d
+	return best
+
+
+func _tauntable(m: Dictionary) -> bool:
+	if m.is_empty() or not bool(m.get("alive", false)):
+		return false
+	if str(m.get("team", "")) != "demon":
+		return false
+	return str(m.get("kind", "")) == "mob"
+
+
+func _dash_landing(from: Vector2i) -> Vector2i:
+	var step := Fixed.rotate_facing(Vector2i(-400, 0), facing)
+	var hops := Balance.DASH_DISTANCE / 400
+	var cursor := from
+	for _i in hops:
+		var nxt := cursor + step
+		if not _walkable_pos(nxt):
+			break
+		cursor = nxt
+	return cursor
+
+
+func _retreat_delta() -> Vector2i:
+	var step := Fixed.rotate_facing(Vector2i(-500, 0), facing)
+	var hops := Balance.DISENGAGE_DISTANCE / 500
+	var cursor := anchor
+	var moved := Vector2i.ZERO
+	for _i in hops:
+		var nxt := cursor + step
+		if not _walkable_pos(nxt):
+			break
+		cursor = nxt
+		moved += step
+	return moved
 
 
 func _cast_scatter() -> void:
@@ -928,6 +1073,9 @@ func _formation() -> void:
 		if not a.casting.is_empty() and str(a.casting.get("ability", "")) == "slow_revive":
 			i += 1
 			continue
+		if int(a.get("untargetable_until", 0)) > tick:
+			i += 1
+			continue
 		var dest := _clamp_pos(anchor + Fixed.rotate_facing(offsets[i], facing))
 		var speed := Balance.MOVE_SPEED + Balance.FORMATION_CATCH
 		if tick < root_until:
@@ -954,8 +1102,8 @@ func _sync_room() -> void:
 func _passives() -> void:
 	var raphael := _hero("raphael")
 	if raphael.alive and raphael.casting.is_empty() and raphael.hp < raphael.hp_max:
-		if tick % 8 == 0:
-			raphael.hp = mini(raphael.hp_max, int(raphael.hp) + 1)
+		if Balance.RAPHAEL_REGEN_PERIOD > 0 and tick % Balance.RAPHAEL_REGEN_PERIOD == 0:
+			raphael.hp = mini(raphael.hp_max, int(raphael.hp) + Balance.RAPHAEL_REGEN)
 	var azrael := _hero("azrael")
 	if azrael.alive:
 		_reveal_radius(azrael.pos, Balance.DETECT_AURA)
@@ -1112,11 +1260,14 @@ func _separate_mobs() -> void:
 
 
 func _elite_affixes(m: Dictionary) -> void:
+	var taunted := int(m.id) == taunt_id and tick < taunt_until
 	if m.affixes.has("molten") and tick % 20 == 0:
 		for a in _angels():
 			if a.alive and Fixed.dist(a.pos, m.pos) <= Balance.MOLTEN_RADIUS:
 				_hurt(a, Balance.MOLTEN_DMG, "aoe", m.id, true)
-	if not m.affixes.has("teleporter"):
+	if taunted:
+		m.blink = {}
+	if not m.affixes.has("teleporter") or taunted:
 		return
 	if m.blink.is_empty():
 		if tick >= int(m.teleport_at):
@@ -1151,9 +1302,9 @@ func _angel_autos() -> void:
 			a.atk_cd = 4
 			continue
 		a.atk_cd = int(a.period)
-		_hurt(tgt, _out_damage(int(a.atk)), "single", a.id, false)
+		_hurt(tgt, _out_damage(int(a.atk), a.id), "single", a.id, false)
 		if str(a.subtype) == "uriel":
-			a.radiance = mini(5, int(a.radiance) + 1)
+			a.radiance = mini(Balance.RADIANCE_CAP, int(a.radiance) + 1)
 		stats.damage_dealt += int(a.atk)
 
 
@@ -1164,15 +1315,9 @@ func _channels() -> void:
 		var ability := str(a.casting.ability)
 		if ability == "beam":
 			if tick >= int(a.casting.next) and int(a.casting.pulses) > 0:
-				var tgt := _ent(int(a.casting.target))
-				if tgt.is_empty() or not tgt.alive:
-					tgt = _focus_or_nearest(a)
-					if not tgt.is_empty():
-						a.casting.target = tgt.id
-				if not tgt.is_empty() and tgt.alive:
-					_hurt(tgt, _out_damage(16), "single", a.id, false)
+				_beam_pulse(a)
 				a.casting.pulses = int(a.casting.pulses) - 1
-				a.casting.next = tick + 8
+				a.casting.next = tick + Balance.BEAM_PULSE
 			if int(a.casting.pulses) <= 0 or tick >= int(a.casting.until):
 				a.casting = {}
 		elif ability == "slow_revive":
@@ -1182,7 +1327,7 @@ func _channels() -> void:
 				var dead := _ent(int(a.casting.target))
 				a.casting = {}
 				if not dead.is_empty() and not dead.alive:
-					if _revive(dead, 40):
+					if _revive(dead, Balance.REVIVE_PCT):
 						_log("%s stands again." % dead.name, "good")
 					else:
 						_log("The resurrection comes too late.", "bad")
@@ -1201,11 +1346,13 @@ func _zones_and_auras() -> void:
 		if (tick - int(e.born)) % 10 != 0:
 			continue
 		var holy := str(e.subtype) == "holy"
-		var mult := 100 + 20 * int(e.get("stacks", 0))
+		var mult := 100 + Balance.RADIANCE_PER_STACK * int(e.get("stacks", 0))
 		if holy:
+			var uriel := _hero("uriel")
+			var src := int(uriel.id) if not uriel.is_empty() else 0
 			for m in _living_mobs():
 				if Fixed.dist(m.pos, e.pos) <= int(e.radius):
-					_hurt(m, _out_damage(int(e.dmg) * mult / 100), "aoe", 0, true)
+					_hurt(m, _out_damage(int(e.dmg) * mult / 100, src), "aoe", src, true)
 		else:
 			for a in _angels():
 				if a.alive and Fixed.dist(a.pos, e.pos) <= int(e.radius):
@@ -1557,7 +1704,7 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 		if int(target.mark_until) > tick:
 			amount = amount * Balance.MARK_AMP / 100
 		if str(target.subtype) == "michael":
-			amount = amount * 75 / 100
+			amount = amount * Balance.MICHAEL_MITIGATION / 100
 		if amount < 1:
 			amount = 1
 		if tick < phalanx_until and int(target.phalanx) > 0:
@@ -1577,7 +1724,7 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 		stats.damage_taken += dealt
 		_dark_from_damage(str(target.get("room", party_room_id)), dealt)
 		target.room = party_room_id
-		if not target.casting.is_empty() and str(target.casting.get("ability", "")) == "slow_revive" and dealt >= 14:
+		if not target.casting.is_empty() and str(target.casting.get("ability", "")) == "slow_revive" and dealt >= Balance.REVIVE_INTERRUPT:
 			_interrupt_revive(target)
 	else:
 		stats.damage_dealt += dealt
@@ -1635,6 +1782,7 @@ func _revive(target: Dictionary, pct: int) -> bool:
 	target.silence_until = 0
 	target.rot_until = 0
 	target.mark_until = 0
+	target.weaken_until = 0
 	target.shield = 0
 	target.casting = {}
 	target.downed_until = 0
@@ -1668,7 +1816,7 @@ func _interrupt_revive(owner: Dictionary) -> void:
 	if owner.casting.is_empty():
 		return
 	owner.casting = {}
-	golden = mini(Balance.ELIXIR_MAX, golden + 3000)
+	golden = mini(Balance.ELIXIR_MAX, golden + Balance.REVIVE_REFUND)
 	_log("Resurrection interrupted.", "bad")
 
 
@@ -1766,7 +1914,7 @@ func curse_pending_or_active() -> bool:
 		if str(e.kind) == "curse" and not bool(e.get("landed", false)):
 			return true
 		if str(e.team) == "angel" and e.alive:
-			if int(e.silence_until) > tick or int(e.rot_until) > tick or int(e.mark_until) > tick:
+			if int(e.silence_until) > tick or int(e.rot_until) > tick or int(e.mark_until) > tick or int(e.get("weaken_until", 0)) > tick:
 				return true
 	return false
 
@@ -1885,8 +2033,10 @@ func build_snapshot() -> Dictionary:
 			"silence": int(a.silence_until) > tick,
 			"rot": int(a.rot_until) > tick,
 			"mark": int(a.mark_until) > tick,
+			"weaken": int(a.get("weaken_until", 0)) > tick,
 			"radiance": int(a.get("radiance", 0)),
 			"casting": str(a.casting.get("ability", "")),
+			"untargetable": int(a.get("untargetable_until", 0)) > tick,
 			"downed": downed,
 			"downed_left": maxi(0, int(a.get("downed_until", 0)) - tick) if downed else 0,
 			"final_death": bool(a.get("final_death", false)),
@@ -1949,6 +2099,11 @@ func build_snapshot() -> Dictionary:
 		"popups": popups.duplicate(true),
 		"stats": stats.duplicate(true),
 		"shield_wall": tick < shield_wall_until,
+		"shield_facing": shield_wall_facing,
+		"taunt_id": taunt_id if taunt_until > tick else 0,
+		"beam_on": _beam_on(),
+		"beam_aim": _beam_aim(),
+		"beam_from": _hero("uriel").pos if _beam_on() else Vector2i.ZERO,
 		"rooted": tick < root_until,
 		"scatter_cd": maxi(0, int(maneuver_cd.scatter) - tick),
 		"phalanx_cd": maxi(0, int(maneuver_cd.phalanx) - tick),
@@ -1972,6 +2127,7 @@ func checksum() -> int:
 	h = Fixed.mix(h, rooms_cleared)
 	h = Fixed.mix(h, stance)
 	h = Fixed.mix(h, focus_id)
+	h = Fixed.mix(h, taunt_id)
 	h = Fixed.mix(h, anchor.x)
 	h = Fixed.mix(h, anchor.y)
 	h = Fixed.mix(h, 1 if phase == "lucifer" else 0)
@@ -2026,6 +2182,7 @@ func _spawn_heroes() -> void:
 			"silence_until": 0,
 			"rot_until": 0,
 			"mark_until": 0,
+			"weaken_until": 0,
 			"body_block_until": 0,
 			"untargetable_until": 0,
 			"radiance": 0,
@@ -2260,11 +2417,69 @@ func _lead_angel() -> Dictionary:
 	return best
 
 
-func _out_damage(base: int) -> int:
+func _out_damage(base: int, source_id: int = 0) -> int:
+	var amount := base
 	var g := _hero("gabriel")
-	if g.is_empty() or not g.alive:
-		return base
-	return base * 112 / 100
+	if not g.is_empty() and g.alive:
+		amount = amount * Balance.GABRIEL_AURA / 100
+	if source_id != 0:
+		var src := _ent(source_id)
+		if not src.is_empty() and int(src.get("weaken_until", 0)) > tick:
+			amount = amount * Balance.WEAKEN_DEALT / 100
+	if amount < 1 and base > 0:
+		return 1
+	return amount
+
+
+func _beam_pulse(a: Dictionary) -> void:
+	if bool(a.casting.get("steered", false)):
+		var aim: Vector2i = a.casting.get("aim", a.pos)
+		for m in _living_mobs():
+			if Fixed.dist(a.pos, m.pos) > int(a.range):
+				continue
+			if _dist_to_segment(m.pos, a.pos, aim) <= Balance.BEAM_HALF_WIDTH:
+				_hurt(m, _out_damage(Balance.BEAM_DMG, a.id), "single", a.id, false)
+		return
+	var tgt := _ent(int(a.casting.get("target", 0)))
+	if tgt.is_empty() or not tgt.alive:
+		tgt = _focus_or_nearest(a)
+		if not tgt.is_empty():
+			a.casting.target = tgt.id
+	if tgt.is_empty() or not tgt.alive:
+		return
+	if Fixed.dist(a.pos, tgt.pos) > int(a.range):
+		return
+	a.casting.aim = tgt.pos
+	_hurt(tgt, _out_damage(Balance.BEAM_DMG, a.id), "single", a.id, false)
+
+
+func _beam_on() -> bool:
+	var uriel := _hero("uriel")
+	if uriel.is_empty() or uriel.casting.is_empty():
+		return false
+	return str(uriel.casting.get("ability", "")) == "beam"
+
+
+func _beam_aim() -> Vector2i:
+	var uriel := _hero("uriel")
+	if uriel.is_empty() or uriel.casting.is_empty():
+		return Vector2i.ZERO
+	return uriel.casting.get("aim", Vector2i.ZERO)
+
+
+func _lowest_backline() -> Dictionary:
+	var best: Dictionary = {}
+	var best_pct := 999
+	for a in _angels():
+		if not a.alive or not _is_backline(a):
+			continue
+		var pct := int(a.hp) * 100 / int(a.hp_max)
+		if pct < best_pct or (pct == best_pct and (best.is_empty() or int(a.id) < int(best.id))):
+			best = a
+			best_pct = pct
+	if best.is_empty():
+		return _lowest_living()
+	return best
 
 
 func _focus_or_nearest(from: Dictionary) -> Dictionary:
@@ -2312,7 +2527,7 @@ func _nearest_angel(pos: Vector2i) -> Dictionary:
 
 
 func _mob_target(m: Dictionary) -> Dictionary:
-	if tick < taunt_until:
+	if tick < taunt_until and int(m.id) == taunt_id:
 		var michael := _hero("michael")
 		if michael.alive:
 			return michael
@@ -2512,6 +2727,7 @@ func _copy_unit(e: Dictionary) -> Dictionary:
 		"mark": int(e.get("mark_until", 0)) > tick,
 		"silence": int(e.get("silence_until", 0)) > tick,
 		"rot": int(e.get("rot_until", 0)) > tick,
+		"weaken": int(e.get("weaken_until", 0)) > tick,
 		"radiance": int(e.get("radiance", 0)),
 		"downed": not bool(e.alive) and not bool(e.get("final_death", false)) and str(e.kind) == "angel",
 		"downed_left": maxi(0, int(e.get("downed_until", 0)) - tick) if (not bool(e.alive) and not bool(e.get("final_death", false))) else 0,

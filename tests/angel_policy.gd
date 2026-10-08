@@ -207,7 +207,7 @@ func _debuffed(sim) -> bool:
 	for a in sim._angels():
 		if not a.alive:
 			continue
-		if int(a.silence_until) > sim.tick or int(a.rot_until) > sim.tick or int(a.mark_until) > sim.tick:
+		if int(a.silence_until) > sim.tick or int(a.rot_until) > sim.tick or int(a.mark_until) > sim.tick or int(a.get("weaken_until", 0)) > sim.tick:
 			return true
 	return false
 

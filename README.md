@@ -4,7 +4,7 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M2 (combat core).** Per-angel health, a 3-second downed window, auto-attack, and a touch scene on top of the same deterministic sim. Twin elixir bars show the live banks and the stage regen. One command bar spends Golden Elixir. A scripted competent party still reaches the throne in about 8.6 minutes and wins in about 10.6. Placeholder shapes, not final art. No networking yet: every action, angel or demon, goes through `submit()`.
+> **Status: M3 (the five hero kits) on the M2 combat core.** Per-angel health, auto-attack, and a 3-second downed window sit under five locked kits (3 actives + 1 passive). A lethal hit downs that angel; Raphael's slow revive, Gabriel's emergency resurrection, and the altar charge can still reach them until the window closes. Michael taunts one enemy, raises a shield wall, and body-blocks the next single hit. Raphael heals one ally, heals the party, and slow-casts a revive. Azrael bursts, disarms a revealed trap, and dashes out. Uriel channels a beam you drag to steer, drops a holy zone, and disengages the squad. Gabriel cleanses (Silence, then Rot, then Mark, then Weaken), shields himself, and emergency-revives. Passives: Michael's bulk, Raphael's regen while he is not casting, Azrael's detect aura, Uriel's Radiance stacks, Gabriel's damage aura. Twin elixir bars show the live banks and the stage regen. A scripted competent party still reaches the throne in about 8.0 minutes and wins in about 9.5. Placeholder shapes, not final art. No networking yet: every action, angel or demon, goes through `submit()`.
 
 ---
 
@@ -20,7 +20,8 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 | Portrait | That angel's HP. DOWN counts 3 seconds, then the death is final. |
 | Tap the altar node | Channel the revive charge (the altar is in the demon's strongest room). |
 | Shield / Heal / Cleanse / Detect / Burst | Contextual commands. Each routes to the angel who owns it. |
-| Tap a portrait | Show that angel's three actives. Back returns to the shared bar. |
+| Tap a portrait | Show that angel's three actives and passive. Back returns to the shared bar. |
+| Drag during Uriel's beam | Steer the beam. A tap on the ground steers it too, until the channel ends. |
 | Tight / Spread / Column | Persistent stance. |
 | Scatter Roll / Phalanx Push | Short-cooldown maneuvers. They spend no elixir and work while silenced. |
 | 1–5, Z, X, Q/W/E | Same commands from a keyboard. |
@@ -62,7 +63,7 @@ godot --headless --path . --import
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite covers determinism, fog, elixir (cap, no rubber-band, compounding by stage), tier gates, the seal and the font, stance vs traps, curse telegraph, cleanse order, route lock, anti-turtle, echo budgeting, altar revive, the length of the road, and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at about 8.6 minutes and wins at about 10.6. The empty road, stakes included and no demon, is about 7.1 minutes and 1280 tiles.
+`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 36 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, altar revive, the length of the road, and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at about 8.0 minutes and wins at about 9.5. The empty road, stakes included and no demon, is about 7.1 minutes and 1280 tiles.
 
 ---
 
@@ -84,7 +85,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `0.3.0` (versionCode `4`)
+- App name: `Celestial Q Siege`, version `0.4.0` (versionCode `5`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
@@ -117,10 +118,13 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Portrait inspect is view state. It does not change the sim.
 - Detect is a paid wide pulse, and the same button disarms a revealed trap in range.
 - The Dark bar is visible here so the solo lab is readable. A real 1v1 would hide it.
-- Pacing target is 8–12 minutes. The scripted party hits about 10.6: ~8.6 minutes of crawl, ~2 minutes of Lucifer. The marches are the long part; room fights add the rest.
+- Pacing target is 8–12 minutes. The scripted party hits about 9.5: ~8.0 minutes of crawl, ~1.5 minutes of Lucifer. The marches are the long part; room fights add the rest.
 - The director still fills the Dark bank on the long marches, so the echo wave is often the capped one. Spending it down is future tuning.
 - The Gate Seal locks swarm summons. The Cleansing Font stores one auto-cleanse. The altar is still the revive.
-- Uriel's beam tracks the focus target. Finger-steering is deferred.
+- Uriel's beam locks a target until you drag (or tap) to steer the line. An unsteered beam stays single-target.
+- Taunt pulls one mob (the focus, else whoever is on the backline), not the whole room. It also cancels that elite's blink.
+- Gabriel's cleanse order is Silence, Rot, Mark, then Weaken. Weaken is a debuff the cleanse understands; the MVP curses that land are still Silence, Rot, and Mark.
+- Detect on the shared bar is Azrael's disarm when a revealed trap is in reach, and a paid wide pulse otherwise. The passive aura is the short reveal. The pulse is not a fourth active.
 - The altar charge auto-spends on the next death (short delay, half health) and lands inside the 3-second downed window. It does not rewind a death that has already gone final.
 - A slow revive already being cast holds the downed window open until the cast lands or is interrupted.
 - Column eats spikes on the lead angel and suffers longer snares.

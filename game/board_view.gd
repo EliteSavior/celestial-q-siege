@@ -31,6 +31,9 @@ func handle_tap(screen: Vector2) -> void:
 	if world.x < INSET_L or world.y < INSET_T or world.y > size.y - INSET_B:
 		return
 	var milli := _world_to_milli(world)
+	if bool(snap.get("beam_on", false)):
+		game.command("steer", {"pos": milli})
+		return
 	for foe in snap.foes:
 		if Fixed.dist(milli, foe.pos) <= 900:
 			game.command("focus", {"id": int(foe.id)})
@@ -63,6 +66,14 @@ func handle_tap(screen: Vector2) -> void:
 	var tile := Fixed.tile_of(milli)
 	if game.sim.map.at(tile) >= 0:
 		game.command("move_tile", {"tile": tile})
+
+
+func handle_drag(screen: Vector2) -> void:
+	if snap.is_empty() or game == null or not bool(snap.get("beam_on", false)):
+		return
+	if screen.x < INSET_L or screen.y < INSET_T or screen.y > size.y - INSET_B:
+		return
+	game.command("steer", {"pos": _world_to_milli(screen)})
 
 
 func _process(_delta: float) -> void:
@@ -133,6 +144,7 @@ func _draw() -> void:
 		draw_rect(Rect2(c3 - Vector2(8, 8), Vector2(16, 16)), tc)
 		if font:
 			draw_string(font, c3 + Vector2(-18, 22), str(trap.subtype), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.95, 0.8))
+	_draw_kits(font)
 	_draw_telegraphs(font)
 	for foe in snap.foes:
 		_draw_unit(foe, _foe_color(str(foe.subtype)), font, true)
@@ -177,6 +189,36 @@ func _draw() -> void:
 		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Channeling %s  %d%%" % [stake_name, int(snap.altar_progress)], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
 
 
+func _draw_kits(font) -> void:
+	if bool(snap.get("beam_on", false)):
+		var a0 := _milli_screen(snap.beam_from)
+		var a1 := _milli_screen(snap.beam_aim)
+		draw_line(a0, a1, Color(1.0, 0.82, 0.35, 0.9), 5.0)
+		if font:
+			draw_string(font, a1 + Vector2(8, -6), "drag to steer", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 0.9, 0.55))
+	if bool(snap.get("shield_wall", false)):
+		var mp := _hero_pos("michael")
+		if mp != Vector2i.ZERO:
+			var face: Vector2i = snap.get("shield_facing", snap.facing)
+			var mid := mp + Fixed.rotate_facing(Vector2i(700, 0), face)
+			var left := mid + Fixed.rotate_facing(Vector2i(0, -1100), face)
+			var right := mid + Fixed.rotate_facing(Vector2i(0, 1100), face)
+			draw_line(_milli_screen(left), _milli_screen(right), Color(0.55, 0.75, 1.0, 0.85), 6.0)
+	var tid := int(snap.get("taunt_id", 0))
+	if tid > 0:
+		var mp2 := _hero_pos("michael")
+		var foe := _unit_pos(tid)
+		if mp2 != Vector2i.ZERO and foe != Vector2i.ZERO:
+			draw_line(_milli_screen(mp2), _milli_screen(foe), Color(0.95, 0.35, 0.25, 0.8), 2.0)
+
+
+func _hero_pos(subtype: String) -> Vector2i:
+	for a in snap.angels:
+		if str(a.subtype) == subtype and bool(a.alive):
+			return a.pos
+	return Vector2i.ZERO
+
+
 func _draw_telegraphs(font) -> void:
 	var tg: Dictionary = snap.telegraph
 	if tg.is_empty():
@@ -216,6 +258,10 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 		draw_arc(p, radius + 5, 0, TAU, 16, Color(1, 0.2, 0.25), 2.0)
 	if bool(u.get("silence", false)):
 		draw_arc(p, radius + 8, 0, TAU, 12, Color(0.6, 0.7, 1.0), 2.0)
+	if bool(u.get("weaken", false)):
+		draw_arc(p, radius + 11, PI, TAU, 8, Color(0.7, 0.55, 0.85), 2.0)
+	if bool(u.get("rot", false)):
+		draw_arc(p, radius + 11, 0, PI, 8, Color(0.45, 0.7, 0.3), 2.0)
 	var hp := float(maxi(int(u.hp), 0))
 	var mx := float(maxi(int(u.hp_max), 1))
 	var w := 28.0
