@@ -122,6 +122,15 @@ func run_all() -> int:
 		"test_doorway_fight_does_not_end_in_one_tick",
 		"test_entrance_stays_calm_until_the_first_room",
 		"test_golden_regen_is_slower_than_the_infinite_heal_tune",
+		"test_threat_line_names_real_pressure",
+		"test_cleanse_removes_each_curse",
+		"test_portrait_tap_does_not_swap_the_bar",
+		"test_zoom_buttons_change_the_camera",
+		"test_status_icons",
+		"test_threat_bars_relative_to_tank",
+		"test_tank_headroom",
+		"test_tank_opens_the_fight",
+		"test_entrance_takes_no_damage",
 	]
 	ran = tests.size()
 	for name in tests:
@@ -673,6 +682,13 @@ func test_turtle_corruption() -> void:
 	idle.director_enabled = false
 	var moving := CombatSim.new()
 	moving.director_enabled = false
+	# The antechamber does not punish a fresh run. Camping a cleared fork does.
+	_stand(idle, "fork")
+	_stand(moving, "fork")
+	idle.idle_ticks = 0
+	idle.corruption = false
+	moving.idle_ticks = 0
+	moving.corruption = false
 	for _i in Balance.OPENING_GRACE_TICKS + 420:
 		if idle.tick % 50 == 0:
 			var t := Fixed.tile_of(moving.anchor) + Vector2i(1, 0)
@@ -1667,7 +1683,7 @@ func test_michael_kit() -> void:
 		fail("taunt did not pull the mob on Raphael")
 	if str(sim._mob_target(on_raphael).subtype) != "michael":
 		fail("taunted mob is not on Michael")
-	if int(sim._mob_target(bystander).id) == int(michael.id):
+	if int(sim.taunt_id) == int(bystander.id):
 		fail("taunt is not single-target")
 	_pay_blocked(sim, "taunt")
 	michael.cooldowns.erase("taunt")
@@ -3652,7 +3668,7 @@ func test_threat_orders_the_target() -> void:
 	if str(sim._mob_target(mob).subtype) != "michael":
 		fail("tank multiplier did not take aggro")
 		return
-	sim._hurt(mob, 200, "single", int(az.id), false)
+	sim._hurt(mob, 280, "single", int(az.id), false)
 	if str(sim._mob_target(mob).subtype) != "azrael":
 		fail("over-damage did not pull aggro")
 		return
@@ -4301,7 +4317,7 @@ func test_threat_meter_names_the_holder() -> void:
 		fail("holder %s" % str(meter.holder))
 		return
 	var pulling := false
-	sim._hurt(mob, 260, "single", int(az.id), false)
+	sim._hurt(mob, 560, "single", int(az.id), false)
 	meter = sim.build_snapshot().threat
 	for row in meter.rows:
 		if str(row.subtype) == "azrael" and (bool(row.aggro) or bool(row.pulling)):
@@ -4418,16 +4434,9 @@ func test_team_heal_button_is_its_own_control() -> void:
 		fail("zoom sits under the portraits at %s, portraits end %s" % [zout, last_portrait_end])
 		game.queue_free()
 		return
-	var before_zoom: float = game.board.user_zoom
-	zoom_in.pressed.emit()
-	if game.board.user_zoom <= before_zoom:
-		fail("zoom + did not change the camera scale")
-		game.queue_free()
-		return
-	zoom_out.pressed.emit()
-	game.board.apply_pinch_factor(1.25)
-	if game.board.user_zoom <= before_zoom:
-		fail("pinch did not zoom in")
+	# The real press-and-measure check lives in test_zoom_buttons_change_the_camera.
+	if not game.board.has_method("nudge_zoom"):
+		fail("board has no zoom")
 		game.queue_free()
 		return
 	var queued := game.sim.queue.size()
@@ -4651,6 +4660,57 @@ func _pulled_count(sim: CombatSim) -> int:
 	return n
 
 
+func _tap_control(ctrl: Control) -> Control:
+	var pos := ctrl.get_global_rect().get_center()
+	var vp := ctrl.get_viewport()
+	var motion := InputEventMouseMotion.new()
+	motion.position = pos
+	motion.global_position = pos
+	vp.push_input(motion, true)
+	var hovered: Control = vp.gui_get_hovered_control()
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = pos
+	down.global_position = pos
+	vp.push_input(down, true)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = pos
+	up.global_position = pos
+	vp.push_input(up, true)
+	return hovered
+
+
+func _play_game() -> Array:
+	var mounted := _mount_main()
+	var game = mounted[1]
+	game.briefing = false
+	game.paused = true
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.hud._layout_bottom()
+	game._process(0.0)
+	game.board._process(0.0)
+	return mounted
+
+
+func _util_signature(hud) -> String:
+	var parts: PackedStringArray = []
+	for cmd in ["shield", "heal", "cleanse", "detect", "burst"]:
+		parts.append(str(hud._bar[cmd].text))
+	return "|".join(parts)
+
+
+func _meter_row(meter: Dictionary, subtype: String) -> Dictionary:
+	for row in meter.get("rows", []):
+		if str(row.get("subtype", "")) == subtype:
+			return row
+	return {}
+
+
 func _mob_homed(sim: CombatSim, room_id: String) -> int:
 	var n := 0
 	for id in sim.order:
@@ -4666,3 +4726,579 @@ func _first_pulled(sim: CombatSim) -> Dictionary:
 		if str(e.kind) == "mob" and bool(e.alive) and bool(e.get("pulled", false)):
 			return e
 	return {}
+
+
+func test_threat_line_names_real_pressure() -> void:
+	var sim := _lab()
+	for angel in sim._angels():
+		angel.atk_cd = 99999
+	var michael := sim._hero("michael")
+	var before := int(michael.hp)
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(300, 0), 900)
+	mob.pulled = true
+	mob.atk_cd = 1
+	mob.speed = 0
+	mob.range = 2000
+	sim.tick_once()
+	if int(michael.hp) >= before:
+		fail("a pulled mob did not hit the party")
+		return
+	var meter: Dictionary = sim.build_snapshot().threat
+	if int(meter.get("engaged", 0)) <= 0 or str(meter.get("holder", "")) == "":
+		fail("a live fight reported %s" % str(meter))
+		return
+	if str(meter.get("reason", "")) != "mobs":
+		fail("fight reason %s" % str(meter.get("reason", "")))
+		return
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _play_game()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	game.sim = sim
+	game._process(0.0)
+	var line := str(game.hud._aggro.text)
+	if line.contains("no one is fighting"):
+		fail("fight line said nobody is fighting: %s" % line)
+		main.queue_free()
+		return
+	if not line.contains("holds") and not line.contains("pull"):
+		fail("fight line did not name a holder: %s" % line)
+		main.queue_free()
+		return
+	var calm := _lab()
+	calm.corruption = true
+	var curse_sim := _lab()
+	curse_sim._hero("azrael").silence_until = curse_sim.tick + 80
+	var boss := _lab()
+	boss.director_enabled = false
+	boss._cmd_descend(false)
+	boss.transform_until = boss.tick
+	game.sim = calm
+	game._process(0.0)
+	if not str(game.hud._aggro.text).contains("Corruption"):
+		fail("corruption line %s" % game.hud._aggro.text)
+		main.queue_free()
+		return
+	if str(game.hud._aggro.text).contains("no one is fighting"):
+		fail("corruption still said nobody is fighting")
+		main.queue_free()
+		return
+	game.sim = curse_sim
+	game._process(0.0)
+	var curse_line := str(game.hud._aggro.text)
+	if not curse_line.contains("Silence") or not curse_line.contains("Azrael"):
+		fail("curse line %s" % curse_line)
+		main.queue_free()
+		return
+	if curse_line.contains("no one is fighting"):
+		fail("a curse still said nobody is fighting")
+		main.queue_free()
+		return
+	var boss_meter: Dictionary = boss.build_snapshot().threat
+	if str(boss_meter.get("reason", "")) != "boss":
+		fail("lucifer reason %s" % str(boss_meter))
+		main.queue_free()
+		return
+	game.sim = boss
+	game._process(0.0)
+	if not str(game.hud._aggro.text).contains("Lucifer"):
+		fail("boss line %s" % game.hud._aggro.text)
+	main.queue_free()
+
+
+func test_cleanse_removes_each_curse() -> void:
+	var fields := {
+		"silence": "silence_until",
+		"rot": "rot_until",
+		"mark": "mark_until",
+		"weaken": "weaken_until",
+	}
+	for kind in ["silence", "rot", "mark", "weaken"]:
+		var sim := _lab()
+		var hero := sim._hero("raphael")
+		hero[fields[kind]] = sim.tick + 120
+		sim.submit("cleanse", {})
+		sim.tick_once()
+		if int(hero[fields[kind]]) > sim.tick:
+			fail("cleanse left %s on Raphael" % kind)
+			return
+	var both := _lab()
+	both.corruption = true
+	both.idle_ticks = 400
+	both._hero("raphael").silence_until = 500
+	both.submit("cleanse", {})
+	both.tick_once()
+	if both.corruption:
+		fail("cleanse left corruption in place")
+		return
+	if int(both._hero("raphael").silence_until) <= both.tick:
+		fail("corruption cleanse also removed silence")
+		return
+	if both.idle_ticks > 5:
+		fail("corruption cleanse left the idle clock at %d" % both.idle_ticks)
+		return
+	var camp := _lab()
+	_stand(camp, "fork")
+	camp.corruption = true
+	camp.corruption_warned = true
+	camp.idle_ticks = 500
+	camp.turtle_clock = 4
+	camp.golden = 8000
+	camp.submit("cleanse", {})
+	camp.tick_once()
+	camp.tick_once()
+	if camp.corruption or camp.idle_ticks >= Balance.TURTLE_TICKS:
+		fail("corruption returned immediately idle=%d" % camp.idle_ticks)
+		return
+	var rooted := _lab()
+	rooted.root_total = 40
+	rooted.root_until = rooted.tick + 40
+	rooted.submit("cleanse", {})
+	rooted.tick_once()
+	if rooted.tick >= rooted.root_until:
+		fail("cleanse broke a snare")
+		return
+	var snare := _status_named(rooted.unit_statuses(rooted._hero("michael")), "snare")
+	if snare.is_empty() or bool(snare.get("cleansable", true)) or not str(snare.get("note", "")).contains("not cleansable"):
+		fail("snare row %s" % str(snare))
+		return
+	if not _feed(rooted).contains("Nothing to cleanse."):
+		fail("snare cleanse feed %s" % _feed(rooted))
+		return
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _play_game()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	game.sim.root_total = 40
+	game.sim.root_until = game.sim.tick + 40
+	game._process(0.0)
+	if not str(game.hud._room.text).contains("not cleansable"):
+		fail("snare was not labeled on screen: %s" % game.hud._room.text)
+	main.queue_free()
+
+
+func test_portrait_tap_does_not_swap_the_bar() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _play_game()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	var hud = game.hud
+	for key in ["block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]:
+		if not hud._acts.has(key):
+			fail("bar is missing %s" % key)
+			main.queue_free()
+			return
+	var before := _util_signature(hud)
+	if before.contains("Back"):
+		fail("bar opened on a kit: %s" % before)
+		main.queue_free()
+		return
+	var portrait: Button = hud._portraits["azrael"]
+	var hovered := _tap_control(portrait)
+	if hovered != portrait:
+		fail("portrait tap hit %s" % hovered)
+		main.queue_free()
+		return
+	game._process(0.0)
+	var after := _util_signature(hud)
+	if after != before or after.contains("Back"):
+		fail("portrait tap changed the bar\n%s\n%s" % [before, after])
+		main.queue_free()
+		return
+	if str(hud._highlight) != "azrael":
+		fail("portrait tap did not highlight Azrael (%s)" % str(hud._highlight))
+		main.queue_free()
+		return
+	for cmd in hud._bar.keys():
+		if not bool(hud._bar[cmd].visible):
+			fail("%s was hidden by a portrait tap" % cmd)
+			main.queue_free()
+			return
+	var az: Dictionary = game.sim._hero("azrael")
+	var az_pos: Vector2i = az.pos
+	game.sim.golden = 9000
+	var dash: Button = hud._acts["dash"]
+	var dash_hit := _tap_control(dash)
+	if dash_hit != dash:
+		fail("dash tap hit %s" % dash_hit)
+		main.queue_free()
+		return
+	game.sim.tick_once()
+	game._process(0.0)
+	if int(az.untargetable_until) <= game.sim.tick and az.pos == az_pos:
+		fail("dash press did not cast")
+		main.queue_free()
+		return
+	if _util_signature(hud).contains("Back"):
+		fail("dash press swapped the bar %s" % _util_signature(hud))
+		main.queue_free()
+		return
+	var raphael: Dictionary = game.sim._hero("raphael")
+	raphael.hp = int(raphael.hp_max) - 40
+	var hurt := int(raphael.hp)
+	game.sim.golden = 9000
+	game._process(0.0)
+	var mend: Button = hud._acts["mend"]
+	if _tap_control(mend) != mend:
+		fail("mend tap missed the button")
+		main.queue_free()
+		return
+	if game.armed != "single_heal":
+		fail("mend did not arm, armed=%s" % game.armed)
+		main.queue_free()
+		return
+	var ally: Button = hud._portraits["raphael"]
+	if _tap_control(ally) != ally:
+		fail("armed portrait tap missed Raphael")
+		main.queue_free()
+		return
+	game.sim.tick_once()
+	game._process(0.0)
+	if int(raphael.hp) <= hurt:
+		fail("armed portrait tap did not heal Raphael")
+		main.queue_free()
+		return
+	if _util_signature(hud).contains("Back"):
+		fail("a targeted heal swapped the bar")
+	main.queue_free()
+
+
+func test_zoom_buttons_change_the_camera() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _play_game()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	var board = game.board
+	if board.has_method("apply_pinch_factor"):
+		fail("pinch zoom is still wired")
+		main.queue_free()
+		return
+	var before := float(board.zoom)
+	var step := int(board.zoom_step)
+	if before <= 0.2:
+		fail("camera zoom did not compute (%s)" % before)
+		main.queue_free()
+		return
+	var plus: Button = game.hud._zoom_in
+	var hovered := _tap_control(plus)
+	if hovered != plus:
+		fail("zoom + tap hit %s" % hovered)
+		main.queue_free()
+		return
+	board._process(0.0)
+	if int(board.zoom_step) != step + 1:
+		fail("zoom + did not step (%d -> %d)" % [step, int(board.zoom_step)])
+		main.queue_free()
+		return
+	if float(board.zoom) < before * 1.2:
+		fail("zoom + left the camera at %s from %s" % [board.zoom, before])
+		main.queue_free()
+		return
+	var minus: Button = game.hud._zoom_out
+	if _tap_control(minus) != minus:
+		fail("zoom − tap missed the button")
+		main.queue_free()
+		return
+	board._process(0.0)
+	if int(board.zoom_step) != step or absf(float(board.zoom) - before) > 0.001:
+		fail("zoom − did not restore %s step %d" % [board.zoom, int(board.zoom_step)])
+		main.queue_free()
+		return
+	var held_step := int(board.zoom_step)
+	var held_zoom := float(board.zoom)
+	var mag := InputEventMagnifyGesture.new()
+	mag.factor = 1.8
+	mag.position = Vector2(640, 360)
+	game.get_viewport().push_input(mag, true)
+	var a := InputEventScreenTouch.new()
+	a.pressed = true
+	a.index = 0
+	a.position = Vector2(560, 300)
+	var b := InputEventScreenTouch.new()
+	b.pressed = true
+	b.index = 1
+	b.position = Vector2(760, 300)
+	game.get_viewport().push_input(a, true)
+	game.get_viewport().push_input(b, true)
+	board._process(0.0)
+	if int(board.zoom_step) != held_step or absf(float(board.zoom) - held_zoom) > 0.001:
+		fail("pinch changed the camera to step %d zoom %s" % [int(board.zoom_step), board.zoom])
+	main.queue_free()
+
+
+func test_status_icons() -> void:
+	var sim := _lab()
+	var raphael := sim._hero("raphael")
+	raphael.silence_until = sim.tick + Balance.SILENCE_TICKS
+	raphael.shield = 40
+	raphael.radiance = 2
+	sim.corruption = true
+	var rows: Array = sim.unit_statuses(raphael)
+	for id in ["silence", "corruption", "shield", "radiance"]:
+		var row := _status_named(rows, id)
+		if row.is_empty():
+			fail("%s icon row missing" % id)
+			return
+		if str(row.get("symbol", "")) == "" or not row.has("left") or not row.has("total") or not row.has("cleansable"):
+			fail("%s row is incomplete %s" % [id, str(row)])
+			return
+	var silence := _status_named(rows, "silence")
+	if str(silence.polarity) != "debuff" or int(silence.total) < int(silence.left):
+		fail("silence icon %s" % str(silence))
+		return
+	if str(_status_named(rows, "shield").polarity) != "buff":
+		fail("shield is not a buff")
+		return
+	if str(_status_named(rows, "radiance").polarity) != "buff":
+		fail("radiance is not a buff")
+		return
+	sim.root_total = 30
+	sim.root_until = sim.tick + 30
+	var snare := _status_named(sim.unit_statuses(sim._hero("michael")), "snare")
+	if snare.is_empty() or bool(snare.cleansable):
+		fail("snare icon is cleansable %s" % str(snare))
+		return
+	var mob := _mob(sim, "imp", sim._hero("michael").pos + Vector2i(200, 0), 400)
+	sim.golden = 8000
+	sim.submit("ability", {"name": "taunt", "id": int(mob.id)})
+	sim.tick_once()
+	var foe_badge := {}
+	for foe in sim.build_snapshot().foes:
+		if int(foe.get("id", 0)) == int(mob.id):
+			foe_badge = _status_named(foe.get("statuses", []), "taunt")
+	if foe_badge.is_empty() or str(foe_badge.get("polarity", "")) != "debuff":
+		fail("enemy taunt icon %s" % str(foe_badge))
+		return
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _play_game()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	game.sim = sim
+	game._process(0.0)
+	var icons: StatusRow = game.hud._icons["raphael"]
+	if not icons.visible or icons.rows.is_empty():
+		fail("portrait icons were not shown")
+		main.queue_free()
+		return
+	var shown := false
+	for st in icons.rows:
+		if str(st.get("id", "")) == "silence" and str(st.get("polarity", "")) == "debuff":
+			shown = true
+	if not shown:
+		fail("portrait icons hid silence %s" % str(icons.rows))
+		main.queue_free()
+		return
+	var drawn_at := StatusRow.draws
+	icons.queue_redraw()
+	game.board.queue_redraw()
+	var board = game.board
+	after_frame.append(func():
+		if not is_instance_valid(icons) or not is_instance_valid(board):
+			fail("status icons were freed before they drew")
+			return
+		if StatusRow.draws <= drawn_at:
+			fail("buff icons were never drawn")
+		if is_instance_valid(main):
+			main.queue_free()
+	)
+
+
+func test_threat_bars_relative_to_tank() -> void:
+	var sim := _lab()
+	for angel in sim._angels():
+		angel.atk_cd = 99999
+	var michael := sim._hero("michael")
+	var az := sim._hero("azrael")
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(200, 0), 900)
+	mob.pulled = true
+	mob.threat = {str(michael.id): 1000, str(az.id): 400}
+	var safe: Dictionary = _meter_row(sim.build_snapshot().threat, "azrael")
+	if int(safe.get("of_tank", -1)) != 40 or str(safe.get("heat", "")) != "safe":
+		fail("moderate threat painted %s" % str(safe))
+		return
+	var tank: Dictionary = _meter_row(sim.build_snapshot().threat, "michael")
+	if int(tank.get("of_tank", 0)) != 100 or str(tank.get("heat", "")) != "hold":
+		fail("tank bar %s" % str(tank))
+		return
+	mob.threat[str(az.id)] = 700
+	var warn: Dictionary = _meter_row(sim.build_snapshot().threat, "azrael")
+	if int(warn.of_tank) != 70 or str(warn.heat) != "warn":
+		fail("near-pull bar %s" % str(warn))
+		return
+	mob.threat[str(az.id)] = 920
+	var hot: Dictionary = _meter_row(sim.build_snapshot().threat, "azrael")
+	if int(hot.of_tank) != 92 or str(hot.heat) != "pull":
+		fail("about-to-pull bar %s" % str(hot))
+		return
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _play_game()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	game.sim = sim
+	game._process(0.0)
+	var bar: ProgressBar = game.hud._threat["azrael"]
+	var fill := bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if int(bar.value) != 92:
+		fail("hud threat bar shows %s" % bar.value)
+		main.queue_free()
+		return
+	if fill == null or fill.bg_color.r < 0.8 or fill.bg_color.g > 0.45:
+		fail("about-to-pull bar was not red %s" % (fill.bg_color if fill else "none"))
+		main.queue_free()
+		return
+	var tank_bar: ProgressBar = game.hud._threat["michael"]
+	var tank_fill := tank_bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if int(tank_bar.value) != 100 or tank_fill == null or tank_fill.bg_color.r < 0.8 or tank_fill.bg_color.g < 0.5:
+		fail("tank bar looked like a pull %s value %s" % [tank_fill.bg_color if tank_fill else "none", tank_bar.value])
+	main.queue_free()
+
+
+func test_tank_headroom() -> void:
+	if Balance.TANK_THREAT_MULT != 1600 or Balance.HEAL_THREAT_PCT != 35 or Balance.OPENER_THREAT != 480:
+		fail("threat tune drifted %d / %d / %d" % [Balance.TANK_THREAT_MULT, Balance.HEAL_THREAT_PCT, Balance.OPENER_THREAT])
+		return
+	if Balance.THREAT_WARN_PCT != 70 or Balance.THREAT_DANGER_PCT != 92 or Balance.THREAT_PULL_PCT != 85:
+		fail("threat colors drifted")
+		return
+	var auto_threat := 8 * Balance.TANK_THREAT_MULT / 100
+	var heal_threat := Balance.HEAL_PARTY * Balance.HEAL_THREAT_PCT / 100
+	if auto_threat != 128 or heal_threat != 11:
+		fail("documented auto threat %d heal threat %d" % [auto_threat, heal_threat])
+		return
+	if heal_threat * 11 > auto_threat or heal_threat * 12 <= auto_threat:
+		fail("twelve party heals should be what passes one tank auto")
+		return
+	var sim := _lab()
+	for angel in sim._angels():
+		angel.atk_cd = 99999
+	var michael := sim._hero("michael")
+	var raphael := sim._hero("raphael")
+	raphael.hp = int(raphael.hp_max)
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(400, 0), 900)
+	mob.atk_cd = 99999
+	mob.speed = 0
+	sim.tick_once()
+	if not bool(mob.pulled):
+		fail("headroom mob never pulled")
+		return
+	var lead := int(mob.threat.get(str(michael.id), 0))
+	if lead < Balance.OPENER_THREAT:
+		fail("opener threat %d" % lead)
+		return
+	for _i in 10:
+		sim._heal(raphael, Balance.HEAL_PARTY, int(raphael.id))
+	if str(sim._mob_target(mob).get("subtype", "")) != "michael":
+		fail("ten party heals pulled off the opener %s" % str(mob.threat))
+		return
+	var casts := 10
+	while str(sim._mob_target(mob).get("subtype", "")) == "michael" and casts < 80:
+		sim._heal(raphael, Balance.HEAL_PARTY, int(raphael.id))
+		casts += 1
+	if str(sim._mob_target(mob).get("subtype", "")) != "raphael":
+		fail("heals never pulled, casts %d threat %s" % [casts, str(mob.threat)])
+		return
+	if casts < 40 or casts > 50:
+		fail("opener headroom was %d party heals, want about 44" % casts)
+
+
+func test_tank_opens_the_fight() -> void:
+	var sim := _lab()
+	sim.stance = CombatSim.STANCE_TIGHT
+	for angel in sim._angels():
+		angel.atk_cd = 99999
+	var names := ["michael", "raphael", "azrael", "uriel", "gabriel"]
+	var offsets: Array[Vector2i] = [Vector2i(280, 0), Vector2i(0, -260), Vector2i(0, 260), Vector2i(-260, -140), Vector2i(-300, 160)]
+	for i in names.size():
+		sim._hero(names[i]).pos = sim.anchor + offsets[i]
+	var michael := sim._hero("michael")
+	var raphael := sim._hero("raphael")
+	var mob := _mob(sim, "imp", raphael.pos + Vector2i(160, 0), 900)
+	mob.range = 2500
+	mob.atk = 12
+	mob.atk_cd = 1
+	mob.period = 100
+	mob.speed = 0
+	if Fixed.dist(mob.pos, raphael.pos) >= Fixed.dist(mob.pos, michael.pos):
+		fail("setup did not put Raphael closer")
+		return
+	var before := {}
+	for hero in sim._angels():
+		before[str(hero.subtype)] = int(hero.hp)
+	sim.tick_once()
+	if int(michael.hp) >= int(before["michael"]):
+		fail("Michael was not hit first (hp %d target %s threat %s)" % [int(michael.hp), str(sim._mob_target(mob).get("subtype", "")), str(mob.threat)])
+		return
+	for subtype in before.keys():
+		if str(subtype) == "michael":
+			continue
+		if int(sim._hero(str(subtype)).hp) != int(before[subtype]):
+			fail("%s took the opening hit" % subtype)
+			return
+
+
+func test_entrance_takes_no_damage() -> void:
+	var sim := CombatSim.new()
+	if not sim.director_enabled:
+		fail("entrance check ran with the director off")
+		return
+	var hp := {}
+	for angel in sim._angels():
+		hp[str(angel.subtype)] = int(angel.hp)
+	for _i in 600:
+		sim.tick_once()
+		if sim.party_room() != "start":
+			fail("the fresh run left the entrance for %s" % sim.party_room())
+			return
+	if int(sim.stats.damage_taken) != 0 or sim.corruption:
+		fail("entrance took %d and corruption=%s (%s)" % [int(sim.stats.damage_taken), sim.corruption, _feed(sim)])
+		return
+	for angel2 in sim._angels():
+		if int(angel2.hp) != int(hp[str(angel2.subtype)]):
+			fail("%s hp changed in the entrance" % angel2.subtype)
+			return
+	if _feed(sim).contains("Rot"):
+		fail("rot landed in the entrance: %s" % _feed(sim))
+		return
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted := _mount_main()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	var begin: Button = game.hud._begin
+	var hovered := _tap_control(begin)
+	if hovered != begin:
+		fail("Begin tap hit %s" % hovered)
+		main.queue_free()
+		return
+	if game.briefing:
+		fail("Begin did not start the run")
+		main.queue_free()
+		return
+	var hp2 := {}
+	for angel3 in game.sim._angels():
+		hp2[str(angel3.subtype)] = int(angel3.hp)
+	for _j in 400:
+		game.sim.tick_once()
+	if int(game.sim.stats.damage_taken) != 0 or game.sim.corruption:
+		fail("a begun run took damage in the entrance: %s" % _feed(game.sim))
+		main.queue_free()
+		return
+	for angel4 in game.sim._angels():
+		if int(angel4.hp) != int(hp2[str(angel4.subtype)]):
+			fail("begun run hurt %s in the entrance" % angel4.subtype)
+			main.queue_free()
+			return
+	main.queue_free()

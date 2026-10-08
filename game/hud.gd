@@ -47,7 +47,8 @@ var _coach_bg: ColorRect
 var _coach: Label
 var _hide: Button
 var _coach_off := false
-var _inspect := ""
+var _highlight := ""
+var _icons := {}
 var _menu: Button
 var _menu_dim: ColorRect
 var _menu_restart: Button
@@ -120,8 +121,8 @@ func build() -> void:
 	for i in cmds.size():
 		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
-	var act_names := ["taunt", "mend", "team", "strike", "sunstrike"]
-	var act_labels := ["Taunt\nMichael", "Heal\nRaphael", "Team\nRaphael", "Strike\nAzrael", "Sunstrike\nUriel"]
+	var act_names := ["taunt", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
+	var act_labels := ["Taunt", "Heal", "Team", "Strike", "Sunstrike", "Block", "Revive", "Dash", "Beam", "Zone", "Retreat", "Aegis", "Rescue"]
 	for j in act_names.size():
 		var b3 := _btn(act_labels[j], Vector2(748 + j * 130, 540), Vector2(122, 72), _on_act.bind(act_names[j]))
 		_acts[act_names[j]] = b3
@@ -138,7 +139,7 @@ func _notification(what: int) -> void:
 
 
 func on_new_run(to_title: bool) -> void:
-	_inspect = ""
+	_highlight = ""
 	_coach_off = false
 	_rewire_bar()
 	if _end:
@@ -196,6 +197,8 @@ func refresh(snap: Dictionary) -> void:
 		_room.text += "   CORRUPTION"
 	elif bool(snap.corruption_warn):
 		_room.text += "   corruption creeps"
+	if bool(snap.get("rooted", false)):
+		_room.text += "   SNARE — not cleansable"
 	var boss_max := int(snap.boss_hp_max)
 	_boss.visible = boss_max > 0 and str(snap.phase) == "lucifer"
 	_boss_l.visible = _boss.visible
@@ -232,34 +235,14 @@ func refresh(snap: Dictionary) -> void:
 	_set_cd(_scatter, int(snap.scatter_cd), Balance.cooldown("scatter"))
 	_set_cd(_phalanx, int(snap.phalanx_cd), Balance.cooldown("phalanx"))
 	_refresh_acts(snap)
-	if _inspect == "":
-		_passive.text = ""
-		for cmd in _bar.keys():
-			var info: Dictionary = snap.bar[cmd]
-			if cmd == "heal":
-				info = snap.abilities.get("single_heal", info)
-			_apply_ability_button(_bar[cmd], info)
-			if cmd == "heal" and game != null and str(game.armed) == "single_heal":
-				_bar[cmd].text = "Heal one\narmed"
-	else:
-		_passive.text = _passive_line(_inspect)
-		var kit: Array = snap.kits[_inspect]
-		var i := 0
-		for cmd2 in ["shield", "heal", "cleanse", "detect", "burst"]:
-			var btn: Button = _bar[cmd2]
-			if i < kit.size():
-				btn.visible = true
-				_apply_ability_button(btn, snap.abilities[str(kit[i])])
-				_rewire_ability(btn, str(kit[i]))
-			elif i == kit.size():
-				btn.visible = true
-				btn.text = "Back"
-				btn.disabled = false
-				_set_cd(btn, 0, 1)
-				_rewire_back(btn)
-			else:
-				btn.visible = false
-			i += 1
+	_passive.text = _passive_line(_highlight) if _highlight != "" else ""
+	for cmd in _bar.keys():
+		var info: Dictionary = snap.bar[cmd]
+		if cmd == "heal":
+			info = snap.abilities.get("single_heal", info)
+		_apply_ability_button(_bar[cmd], info)
+		if cmd == "heal" and game != null and str(game.armed) == "single_heal":
+			_bar[cmd].text = "Heal one\narmed"
 	var threat_rows := {}
 	var meter: Dictionary = snap.get("threat", {})
 	for row in meter.get("rows", []):
@@ -268,12 +251,21 @@ func refresh(snap: Dictionary) -> void:
 	var holder := str(meter.get("holder", ""))
 	var pulling := str(meter.get("pulling", ""))
 	if _aggro:
-		if int(meter.get("engaged", 0)) <= 0:
-			_aggro.text = "Aggro  —  no one is fighting"
-		elif pulling != "":
-			_aggro.text = "Aggro  %s    %s is about to pull" % [holder.capitalize(), pulling.capitalize()]
+		var reason := str(meter.get("reason", ""))
+		var detail := str(meter.get("detail", ""))
+		if reason == "mobs" and int(meter.get("engaged", 0)) > 0:
+			if pulling != "":
+				_aggro.text = "Aggro  %s    %s is about to pull" % [holder.capitalize(), pulling.capitalize()]
+			else:
+				_aggro.text = "Aggro  %s holds" % holder.capitalize()
+		elif reason == "boss":
+			_aggro.text = "Aggro  Lucifer on %s" % (holder.capitalize() if holder != "" else "the party")
+		elif reason == "corruption":
+			_aggro.text = "Aggro  —  Corruption is ticking"
+		elif reason == "curse":
+			_aggro.text = "Aggro  —  %s, no mobs" % detail
 		else:
-			_aggro.text = "Aggro  %s holds" % holder.capitalize()
+			_aggro.text = "Aggro  —  no one is fighting"
 	for subtype in _portraits.keys():
 		var hs: Dictionary = snap.heroes[subtype]
 		var btn3: Button = _portraits[subtype]
@@ -281,14 +273,28 @@ func refresh(snap: Dictionary) -> void:
 		var trow: Dictionary = threat_rows.get(str(subtype), {})
 		var tbar: ProgressBar = _threat.get(str(subtype), null)
 		if tbar:
+			var of_tank := mini(100, int(trow.get("of_tank", trow.get("pct", 0))))
 			tbar.max_value = 100
-			tbar.value = float(int(trow.get("pct", 0)))
-			if bool(trow.get("aggro", false)):
-				_paint(tbar, Color(0.95, 0.42, 0.18))
-			elif bool(trow.get("pulling", false)):
+			tbar.value = float(of_tank)
+			var heat := str(trow.get("heat", ""))
+			if bool(trow.get("aggro", false)) or heat == "hold":
+				_paint(tbar, Color(0.95, 0.62, 0.2))
+			elif heat == "pull" or bool(trow.get("pulling", false)) and of_tank >= Balance.THREAT_DANGER_PCT:
+				_paint(tbar, Color(0.92, 0.22, 0.18))
+			elif heat == "warn" or bool(trow.get("pulling", false)):
 				_paint(tbar, Color(0.95, 0.82, 0.25))
 			else:
-				_paint(tbar, Color(0.55, 0.48, 0.42))
+				_paint(tbar, Color(0.45, 0.4, 0.36))
+		var icons: StatusRow = _icons.get(str(subtype), null)
+		if icons:
+			var icon_rows: Array = []
+			for angel_u in snap.get("angels", []):
+				if typeof(angel_u) == TYPE_DICTIONARY and str(angel_u.get("subtype", "")) == str(subtype):
+					icon_rows = angel_u.get("statuses", [])
+					break
+			icons.rows = icon_rows
+			icons.visible = not icon_rows.is_empty()
+			icons.queue_redraw()
 		var verb := str(ROLE_VERB.get(str(subtype), ""))
 		var mark := ""
 		if bool(trow.get("aggro", false)):
@@ -296,18 +302,6 @@ func refresh(snap: Dictionary) -> void:
 		elif bool(trow.get("pulling", false)):
 			mark = "  PULL"
 		var flags := ""
-		if bool(hs.silence):
-			flags += " SIL"
-		if bool(hs.rot):
-			flags += " ROT"
-		if bool(hs.mark):
-			flags += " MARK"
-		if bool(hs.get("weaken", false)):
-			flags += " WEAK"
-		if int(hs.get("radiance", 0)) > 0:
-			flags += " R%d" % int(hs.radiance)
-		if int(hs.get("shield", 0)) > 0:
-			flags += " +%d" % int(hs.shield)
 		if str(snap.get("ally_target", "")) == str(subtype):
 			flags += " TGT"
 		if str(hs.get("casting", "")) != "":
@@ -336,6 +330,8 @@ func refresh(snap: Dictionary) -> void:
 			_paint(bar, col)
 			btn3.text = "%s  %s\n%d%s%s" % [subtype.capitalize(), verb, int(hs.hp), flags, mark]
 			btn3.modulate = Color(1, 1, 1)
+		if _highlight == str(subtype) and bool(hs.get("alive", false)):
+			btn3.modulate = Color(1.35, 1.22, 0.72)
 	_show_coach(snap)
 	var in_run := game != null and not bool(game.briefing) and str(snap.outcome) == ""
 	if _menu:
@@ -607,9 +603,17 @@ func _build_portraits() -> void:
 			hover.bg_color = colors[order[i]].lightened(0.15)
 			b.add_theme_stylebox_override("hover", hover)
 		_portraits[order[i]] = b
-		_hp[order[i]] = _hp_bar(b, Vector2(8, 42), Vector2(160, 8))
-		_threat[order[i]] = _hp_bar(b, Vector2(8, 54), Vector2(160, 6))
-		_paint(_threat[order[i]], Color(0.95, 0.55, 0.2))
+		_hp[order[i]] = _hp_bar(b, Vector2(6, 32), Vector2(146, 8))
+		var threat := _hp_bar(b, Vector2(158, 6), Vector2(12, 58))
+		threat.fill_mode = ProgressBar.FILL_BOTTOM_TO_TOP
+		_threat[order[i]] = threat
+		_paint(threat, Color(0.95, 0.62, 0.2))
+		var icons := StatusRow.new()
+		icons.position = Vector2(4, 46)
+		icons.size = Vector2(150, 20)
+		icons.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(icons)
+		_icons[order[i]] = icons
 
 
 func _build_brief() -> void:
@@ -628,7 +632,7 @@ func _build_brief() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brief.add_child(title)
 	var l := Label.new()
-	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Heal, Team, Strike, and Sunstrike sit on the bar. Team heals every living angel.\nHeal arms Raphael's single heal; tap a hero to cast it. Zoom − and + sit under the portraits.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nThe antechamber is quiet. The first fight starts in the next room.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
+	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Heal, Team, Strike, and Sunstrike sit on the bar. Team heals every living angel.\nHeal arms Raphael's single heal; tap a hero to cast it. Zoom − and + sit under the portraits.\nEvery rite is on the bar. Tapping a portrait only aims a single-target rite.\nAttacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nThe antechamber is quiet. The first fight starts in the next room.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
 	l.position = Vector2(170, 104)
 	l.size = Vector2(940, 470)
 	l.clip_text = true
@@ -800,24 +804,47 @@ func _on_cmd(cmd: String) -> void:
 	game.command(cmd, {})
 
 
+func _act_ability(which: String) -> String:
+	match which:
+		"taunt":
+			return "taunt"
+		"mend":
+			return "single_heal"
+		"team":
+			return "party_heal"
+		"strike":
+			return "strike"
+		"sunstrike":
+			return "sunstrike"
+		"block":
+			return "body_block"
+		"revive":
+			return "slow_revive"
+		"dash":
+			return "escape_dash"
+		"beam":
+			return "beam"
+		"zone":
+			return "aoe_zone"
+		"retreat":
+			return "disengage"
+		"aegis":
+			return "self_shield"
+		"rescue":
+			return "emergency_res"
+		_:
+			return ""
+
+
 func _on_act(which: String) -> void:
+	var ability := _act_ability(which)
+	if ability == "":
+		return
 	if which == "team":
 		if game != null:
 			game.armed = ""
-		game.command("ability", {"name": "party_heal"})
+		game.command("ability", {"name": ability})
 		return
-	var ability := ""
-	match which:
-		"taunt":
-			ability = "taunt"
-		"mend":
-			ability = "single_heal"
-		"strike":
-			ability = "strike"
-		"sunstrike":
-			ability = "sunstrike"
-		_:
-			return
 	_arm_or_fire(ability)
 
 
@@ -831,24 +858,18 @@ func _arm_or_fire(ability: String) -> void:
 
 
 func _refresh_acts(snap: Dictionary) -> void:
-	var mapped := {
-		"taunt": "taunt",
-		"mend": "single_heal",
-		"team": "party_heal",
-		"strike": "strike",
-		"sunstrike": "sunstrike",
-	}
-	for key in mapped.keys():
-		if not _acts.has(key):
+	for key in _acts.keys():
+		var ability := _act_ability(str(key))
+		if ability == "":
 			continue
-		var info: Dictionary = snap.abilities.get(str(mapped[key]), {})
+		var info: Dictionary = snap.abilities.get(ability, {})
 		if info.is_empty():
 			continue
 		_apply_ability_button(_acts[key], info)
 
 
 func _place_acts(y: float, bh: float, w: float, left: float) -> void:
-	var names := ["taunt", "mend", "team", "strike", "sunstrike"]
+	var names := ["taunt", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
 	var row: Array = []
 	for name in names:
 		if _acts.has(name):
@@ -857,14 +878,15 @@ func _place_acts(y: float, bh: float, w: float, left: float) -> void:
 
 
 func _on_portrait(subtype: String) -> void:
+	# Ally taps never rebuild the bar. They only cast an armed single-target rite,
+	# or highlight the portrait when nothing is armed.
 	if game != null and str(game.armed) in GameRoot.ALLY_ARM:
 		game.cast_armed({"target": subtype})
 		return
-	if _inspect == subtype:
-		_inspect = ""
+	if _highlight == subtype:
+		_highlight = ""
 	else:
-		_inspect = subtype
-	_rewire_bar()
+		_highlight = subtype
 
 
 func _on_ability(ability: String) -> void:
@@ -877,21 +899,10 @@ func _paint_armed() -> void:
 	var armed := str(game.armed)
 	var lit := Color(1.45, 1.15, 0.45)
 	for key in _acts.keys():
-		var want := ""
-		match key:
-			"taunt":
-				want = "taunt"
-			"mend":
-				want = "single_heal"
-			"team":
-				want = "party_heal"
-			"strike":
-				want = "strike"
-			"sunstrike":
-				want = "sunstrike"
+		var want := _act_ability(str(key))
 		if armed != "" and armed == want:
 			_acts[key].modulate = lit
-	if _inspect == "" and _bar.has("heal") and armed == "single_heal":
+	if _bar.has("heal") and armed == "single_heal":
 		_bar.heal.modulate = lit
 
 
@@ -909,18 +920,6 @@ func _rewire_bar() -> void:
 		_clear_pressed(btn)
 		btn.pressed.connect(_on_cmd.bind(cmd))
 		btn.pressed.connect(_on_press_fx.bind(btn))
-
-
-func _rewire_ability(btn: Button, ability: String) -> void:
-	_clear_pressed(btn)
-	btn.pressed.connect(_on_ability.bind(ability))
-	btn.pressed.connect(_on_press_fx.bind(btn))
-
-
-func _rewire_back(btn: Button) -> void:
-	_clear_pressed(btn)
-	btn.pressed.connect(_on_portrait.bind(_inspect))
-	btn.pressed.connect(_on_press_fx.bind(btn))
 
 
 func _clear_pressed(btn: Button) -> void:

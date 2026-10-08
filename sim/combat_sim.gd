@@ -86,6 +86,7 @@ var shrine_progress := 0
 var shrines_done := {}
 var channeling_shrine := false
 var root_until := 0
+var root_total := 0
 var scatter_until := 0
 var iframe_until := 0
 var phalanx_until := 0
@@ -192,6 +193,7 @@ func reset() -> void:
 	shrines_done = {}
 	channeling_shrine = false
 	root_until = 0
+	root_total = 0
 	scatter_until = 0
 	iframe_until = 0
 	phalanx_until = 0
@@ -713,10 +715,14 @@ func _cmd_steer(pos: Vector2i) -> void:
 
 
 func _do_cleanse() -> bool:
-	# One debuff per cast. Silence, then Rot, then Mark, then Weaken.
+	# One curse per cast. Corruption, then Silence, Rot, Mark, Weaken.
+	# A snare is a trap root, not a curse, and is left in place.
 	var best: Dictionary = {}
 	var best_pri := 0
 	var best_kind := ""
+	if corruption:
+		best_pri = 5
+		best_kind = "corruption"
 	for a in _angels():
 		if not a.alive:
 			continue
@@ -738,20 +744,29 @@ func _do_cleanse() -> bool:
 			best = a
 			best_pri = pri
 			best_kind = kind
-	if best.is_empty():
+	if best_kind == "" or (best_kind != "corruption" and best.is_empty()):
 		_fail("Nothing to cleanse.")
 		return false
-	if best_kind == "silence":
+	if best_kind == "corruption":
+		corruption = false
+		corruption_warned = false
+		idle_ticks = 0
+		turtle_clock = 0
+		_log("Gabriel cleanses the corruption.", "good")
+	elif best_kind == "silence":
 		best.silence_until = 0
+		_log("Gabriel cleanses silence from %s." % best.name, "good")
 	elif best_kind == "rot":
 		best.rot_until = 0
+		_log("Gabriel cleanses rot from %s." % best.name, "good")
 	elif best_kind == "mark":
 		best.mark_until = 0
+		_log("Gabriel cleanses mark from %s." % best.name, "good")
 	else:
 		best.weaken_until = 0
+		_log("Gabriel cleanses weaken from %s." % best.name, "good")
 	stats.curses_cleansed += 1
 	_grant_golden(Balance.CLEANSE_BOUNTY, party_room_id)
-	_log("Gabriel cleanses %s from %s." % [best_kind, best.name], "good")
 	return true
 
 
@@ -1413,7 +1428,12 @@ func _idle_tick() -> void:
 	if room.is_empty():
 		return
 	var kind := str(room.kind)
-	var is_cleared := bool(cleared.get(party_room_id, false)) or kind in ["start", "corridor", "fork", "seal", "font", "altar"]
+	# The antechamber is a lobby. Camping a cleared fork still corrupts;
+	# standing on the title's first tile must not.
+	if kind == "start":
+		idle_ticks = 0
+		return
+	var is_cleared := bool(cleared.get(party_room_id, false)) or kind in ["corridor", "fork", "seal", "font", "altar"]
 	if not is_cleared:
 		idle_ticks = 0
 		return
@@ -1550,8 +1570,9 @@ func _spring_trap(e: Dictionary) -> void:
 		elif _effective_stance() == STANCE_SPREAD:
 			dur = 22
 		root_until = tick + dur
+		root_total = dur
 		path = []
-		_log("Snared.", "bad")
+		_log("Snared. Cleanse will not break a trap.", "bad")
 	elif kind == "hellflame":
 		_add_zone(e.pos, Balance.HELLFLAME_RADIUS, 60, 8, "hell", 0)
 		_log("Hellflame erupts.", "bad")
@@ -1733,7 +1754,7 @@ func _zones_and_auras() -> void:
 		if not a.alive:
 			continue
 		if int(a.rot_until) > tick and tick % Balance.ROT_PERIOD == 0:
-			_hurt(a, Balance.ROT_DMG, "dot", 0, true)
+			_hurt(a, Balance.ROT_DMG, "dot", 0, true, "Rot")
 
 
 func _curses_land() -> void:
@@ -2015,7 +2036,7 @@ func _turtle() -> void:
 	if turtle_clock % Balance.TURTLE_DMG_PERIOD == 0:
 		for a in _angels():
 			if a.alive:
-				_hurt(a, Balance.TURTLE_DMG, "dot", 0, true)
+				_hurt(a, Balance.TURTLE_DMG, "dot", 0, true, "Corruption")
 
 
 func _resolve_revives() -> void:
@@ -2084,7 +2105,7 @@ func _win_lose() -> void:
 
 # --- damage / healing -------------------------------------------------------
 
-func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: bool) -> int:
+func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: bool, source_name: String = "") -> int:
 	if target.is_empty() or not bool(target.get("alive", false)):
 		return 0
 	if amount <= 0:
@@ -2139,7 +2160,8 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 		stats.damage_dealt += dealt
 	# Angel damage is "bad" (red). Foe damage is "dmg" (yellow), not "good",
 	# so a hit does not read as a heal. Heals stay "good" (green).
-	_popup(target.pos, str(dealt), "bad" if str(target.team) == "angel" else "dmg")
+	var pop := str(dealt) if source_name == "" else "%s %d" % [source_name, dealt]
+	_popup(target.pos, pop, "bad" if str(target.team) == "angel" else "dmg")
 	if int(target.hp) <= 0:
 		_die(target)
 	return dealt
@@ -3048,7 +3070,8 @@ func _threat_meter() -> Dictionary:
 	var totals := {}
 	var holds := {}
 	var engaged := 0
-	for subtype in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
+	var names := ["michael", "raphael", "azrael", "uriel", "gabriel"]
+	for subtype in names:
 		totals[subtype] = 0
 		holds[subtype] = 0
 	for m in _living_mobs():
@@ -3065,41 +3088,109 @@ func _threat_meter() -> Dictionary:
 			if not totals.has(sub):
 				continue
 			totals[sub] = int(totals[sub]) + _effective_threat(m, a)
+	var reason := "calm"
 	var holder := ""
-	var held := 0
-	for subtype in holds.keys():
-		var n := int(holds[subtype])
-		if n > held or (n == held and n > 0 and (holder == "" or str(subtype) < holder)):
-			held = n
-			holder = str(subtype)
-	var top := 0
-	for subtype in totals.keys():
-		top = maxi(top, int(totals[subtype]))
+	if engaged > 0:
+		reason = "mobs"
+		var held := 0
+		for subtype in holds.keys():
+			var n := int(holds[subtype])
+			if n > held or (n == held and n > 0 and (holder == "" or str(subtype) < holder)):
+				held = n
+				holder = str(subtype)
+	else:
+		var boss := _boss()
+		if phase == "lucifer" and not boss.is_empty() and bool(boss.get("alive", false)) and tick >= transform_until:
+			engaged = 1
+			reason = "boss"
+			var nearest := _nearest_angel(boss.pos)
+			holder = str(nearest.get("subtype", "")) if not nearest.is_empty() else ""
+		elif corruption:
+			reason = "corruption"
+		else:
+			var curse_line := _curse_pressure()
+			if curse_line != "":
+				reason = "curse"
+				holder = curse_line
+	var tank_threat := int(totals.get("michael", 0))
 	var rows: Array = []
 	var pulling := ""
-	var order_names := ["michael", "raphael", "azrael", "uriel", "gabriel"]
-	for subtype in order_names:
+	for subtype in names:
 		var threat := int(totals[subtype])
-		var pct := 0 if top <= 0 else threat * 100 / top
-		var aggro: bool = subtype == holder and engaged > 0 and int(holds[subtype]) > 0
-		var soon: bool = engaged > 0 and not aggro and pct >= Balance.THREAT_PULL_PCT and threat > 0
+		var of_tank := 0
+		if subtype == "michael":
+			of_tank = 100 if tank_threat > 0 or (reason == "mobs" and holder == "michael") else 0
+		elif tank_threat <= 0:
+			of_tank = 100 if threat > 0 else 0
+		else:
+			of_tank = threat * 100 / tank_threat
+		var aggro: bool = reason == "mobs" and subtype == holder and engaged > 0 and int(holds.get(subtype, 0)) > 0
+		var soon: bool = reason == "mobs" and engaged > 0 and not aggro and of_tank >= Balance.THREAT_PULL_PCT and threat > 0
 		if soon and pulling == "":
 			pulling = subtype
+		var heat := "safe"
+		if subtype != "michael" and reason == "mobs":
+			if of_tank >= Balance.THREAT_DANGER_PCT:
+				heat = "pull"
+			elif of_tank >= Balance.THREAT_WARN_PCT:
+				heat = "warn"
+		elif aggro:
+			heat = "hold"
 		var hero := _hero(subtype)
 		rows.append({
 			"subtype": subtype,
 			"name": hero.name if not hero.is_empty() else subtype,
 			"threat": threat,
-			"pct": pct,
+			"pct": of_tank,
+			"of_tank": of_tank,
+			"tank": tank_threat,
 			"aggro": aggro,
 			"pulling": soon,
+			"heat": heat,
 		})
+	var detail := ""
+	if reason == "curse":
+		detail = holder
+		holder = ""
+	elif reason == "corruption":
+		detail = "Corruption"
+	elif reason == "boss":
+		detail = "Lucifer"
 	return {
 		"holder": holder if engaged > 0 else "",
 		"pulling": pulling,
 		"engaged": engaged,
+		"reason": reason,
+		"detail": detail,
+		"tank": tank_threat,
 		"rows": rows,
 	}
+
+
+func _curse_pressure() -> String:
+	var best := ""
+	var best_pri := 0
+	for a in _angels():
+		if not a.alive:
+			continue
+		var kind := ""
+		var pri := 0
+		if int(a.silence_until) > tick:
+			kind = "Silence"
+			pri = 4
+		elif int(a.rot_until) > tick:
+			kind = "Rot"
+			pri = 3
+		elif int(a.mark_until) > tick:
+			kind = "Mark"
+			pri = 2
+		elif int(a.get("weaken_until", 0)) > tick:
+			kind = "Weaken"
+			pri = 1
+		if pri > best_pri:
+			best_pri = pri
+			best = "%s on %s" % [kind, a.name]
+	return best
 
 
 func threat_of(mob_id: int, angel_id: int) -> int:
@@ -3154,7 +3245,10 @@ func _update_aggro(m: Dictionary) -> void:
 			m.threat = {}
 		return
 	if _angel_provokes(m):
+		var was_pulled := bool(m.get("pulled", false))
 		m.pulled = true
+		if not was_pulled:
+			_seed_opener_threat(m)
 
 
 func _angel_provokes(m: Dictionary) -> bool:
@@ -3208,7 +3302,10 @@ func _note_damage_threat(target: Dictionary, source_id: int, dealt: int) -> void
 	var src := _ent(source_id)
 	if src.is_empty() or str(src.get("team", "")) != "angel":
 		return
+	var was_pulled := bool(target.get("pulled", false))
 	target.pulled = true
+	if not was_pulled:
+		_seed_opener_threat(target)
 	var amount := dealt
 	if str(src.get("subtype", "")) == "michael":
 		amount = dealt * Balance.TANK_THREAT_MULT / 100
@@ -3238,6 +3335,17 @@ func _threat_from_heal(source_id: int, amount: int) -> void:
 		if i < rem:
 			add += 1
 		_add_threat(engaged[i], source_id, add)
+
+
+func _seed_opener_threat(mob: Dictionary) -> void:
+	var michael := _hero("michael")
+	if michael.is_empty() or not michael.alive:
+		return
+	if typeof(mob.get("threat", null)) != TYPE_DICTIONARY:
+		mob.threat = {}
+	var key := str(michael.id)
+	if int(mob.threat.get(key, 0)) < Balance.OPENER_THREAT:
+		mob.threat[key] = Balance.OPENER_THREAT
 
 
 func _add_threat(mob: Dictionary, angel_id: int, amount: int) -> void:
@@ -3533,10 +3641,19 @@ func _copy_unit(e: Dictionary) -> Dictionary:
 ## here is written back into the tick.
 func unit_statuses(e: Dictionary) -> Array:
 	var out: Array = []
-	_push_timed(out, e, "silence", "debuff", "SIL", "silence_until")
-	_push_timed(out, e, "rot", "debuff", "ROT", "rot_until")
-	_push_timed(out, e, "mark", "debuff", "MRK", "mark_until")
-	_push_timed(out, e, "weaken", "debuff", "WEK", "weaken_until")
+	_push_timed(out, e, "silence", "debuff", "SIL", "silence_until", Balance.SILENCE_TICKS, true)
+	_push_timed(out, e, "rot", "debuff", "ROT", "rot_until", Balance.ROT_TICKS, true)
+	_push_timed(out, e, "mark", "debuff", "MRK", "mark_until", Balance.MARK_TICKS, true)
+	_push_timed(out, e, "weaken", "debuff", "WEK", "weaken_until", Balance.WEAKEN_TICKS, true)
+	if str(e.get("kind", "")) == "angel" and bool(e.get("alive", false)) and corruption:
+		var period := Balance.TURTLE_DMG_PERIOD
+		var into := turtle_clock % period
+		var left := period - into
+		if left <= 0:
+			left = period
+		out.append(_status_row("corruption", "debuff", "CORRUPT", 1, left, period, true))
+	if str(e.get("kind", "")) == "angel" and bool(e.get("alive", false)) and tick < root_until:
+		out.append(_status_row("snare", "debuff", "SNARE", 1, root_until - tick, maxi(root_total, root_until - tick), false))
 	var shield := int(e.get("shield", 0))
 	if shield > 0:
 		out.append(_status_row("shield", "buff", "SH", shield, 0))
@@ -3560,19 +3677,23 @@ func unit_statuses(e: Dictionary) -> Array:
 	return out
 
 
-func _push_timed(out: Array, e: Dictionary, id: String, polarity: String, label: String, field: String) -> void:
+func _push_timed(out: Array, e: Dictionary, id: String, polarity: String, label: String, field: String, total: int, cleansable: bool) -> void:
 	var until := int(e.get(field, 0))
 	if until > tick:
-		out.append(_status_row(id, polarity, label, 1, until - tick))
+		out.append(_status_row(id, polarity, label, 1, until - tick, total, cleansable))
 
 
-func _status_row(id: String, polarity: String, label: String, stacks: int, left: int) -> Dictionary:
+func _status_row(id: String, polarity: String, label: String, stacks: int, left: int, total: int = 0, cleansable: bool = true) -> Dictionary:
 	return {
 		"id": id,
 		"polarity": polarity,
 		"label": label,
 		"stacks": stacks,
 		"left": left,
+		"total": total if total > 0 else left,
+		"cleansable": cleansable,
+		"symbol": id,
+		"note": "" if cleansable else "not cleansable",
 	}
 
 
