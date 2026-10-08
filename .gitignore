@@ -1,0 +1,33 @@
+# Godot 4 editor/import cache (regenerated on import)
+.godot/
+# Godot 3-era import cache dir, just in case
+.import/
+
+# Android Gradle build template (installed per-machine via "Install Android Build Template")
+android/build/
+android/.build_version
+
+# Export output / binaries
+build/
+*.apk
+*.aab
+*.apks
+*.idsig
+*.pck
+*.zip
+
+# Signing material — NEVER commit keystores or credentials
+*.keystore
+*.jks
+export_credentials.cfg
+
+# Mono / C# (not used yet, here for future-proofing)
+.mono/
+data_*/
+mono_crash.*.json
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.tmp
+*.translation
