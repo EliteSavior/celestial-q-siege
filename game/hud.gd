@@ -17,6 +17,7 @@ var _threat := {}
 var _aggro: Label
 var _zoom_in: Button
 var _zoom_out: Button
+var _zoom_l: Label
 var _bar := {}
 var _acts := {}
 var _stances := {}
@@ -102,8 +103,13 @@ func build() -> void:
 	_menu = _btn("Menu", Vector2(1088, 52), Vector2(176, 64), _on_menu)
 	_aggro = _label(Vector2(210, 78), "Aggro", 16)
 	_aggro.size = Vector2(640, 24)
-	_zoom_out = _btn("−", Vector2(8, 500), Vector2(88, 64), _on_zoom.bind(-1))
-	_zoom_in = _btn("+", Vector2(104, 500), Vector2(88, 64), _on_zoom.bind(1))
+	_zoom_l = _label(Vector2(8, 382), "ZOOM", 14)
+	_zoom_l.size = Vector2(176, 20)
+	_zoom_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_zoom_out = _btn("−", Vector2(8, 404), Vector2(84, 64), _on_zoom.bind(-1))
+	_zoom_in = _btn("+", Vector2(100, 404), Vector2(84, 64), _on_zoom.bind(1))
+	_zoom_out.add_theme_font_size_override("font_size", 32)
+	_zoom_in.add_theme_font_size_override("font_size", 32)
 	var names := ["Tight", "Spread", "Column"]
 	for i in names.size():
 		var b := _btn(names[i], Vector2(210 + i * 98, 640), Vector2(90, 48), _on_stance.bind(i))
@@ -114,8 +120,8 @@ func build() -> void:
 	for i in cmds.size():
 		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
-	var act_names := ["taunt", "mend", "strike", "sunstrike"]
-	var act_labels := ["Taunt\nMichael", "Heal\nRaphael", "Strike\nAzrael", "Sunstrike\nUriel"]
+	var act_names := ["taunt", "mend", "team", "strike", "sunstrike"]
+	var act_labels := ["Taunt\nMichael", "Heal\nRaphael", "Team\nRaphael", "Strike\nAzrael", "Sunstrike\nUriel"]
 	for j in act_names.size():
 		var b3 := _btn(act_labels[j], Vector2(748 + j * 130, 540), Vector2(122, 72), _on_act.bind(act_names[j]))
 		_acts[act_names[j]] = b3
@@ -397,16 +403,19 @@ func _layout_bottom() -> void:
 		h = 720.0
 	if w < 400.0:
 		w = 1280.0
+	var pause_x := _top_pause_x(w)
 	if _pause:
-		_pause.position = Vector2(w - 192.0, 8)
+		_pause.position = Vector2(pause_x, 8)
+		_pause.size = Vector2(96, 64)
 	if _speed:
-		_speed.position = Vector2(w - 92.0, 8)
+		_speed.position = Vector2(pause_x + 104.0, 8)
+		_speed.size = Vector2(72, 64)
 	if w < 1200.0:
 		_layout_narrow(w, h)
 	else:
 		_layout_wide(w, h)
 	if _menu:
-		_menu.position = Vector2(w - 192.0, 52)
+		_menu.position = Vector2(w - 184.0, 8)
 		_menu.size = Vector2(176, 64)
 	if _menu_restart:
 		var mx := (w - 320.0) * 0.5
@@ -435,99 +444,112 @@ func _layout_bottom() -> void:
 		_end_label.position = Vector2((w - 760.0) * 0.5, h * 0.32)
 
 
-func _layout_wide(w: float, h: float) -> void:
+func _top_pause_x(w: float) -> float:
+	# Pause 96, gap 8, Speed 72, gap 8, Menu 176, margin 8.
+	return w - 368.0
+
+
+func _place_meters(w: float) -> void:
+	var pause_x := _top_pause_x(w)
+	var left := 210.0
+	var right := pause_x - 12.0
+	var span: float = maxf(80.0, floor((right - left - 16.0) * 0.5))
 	if _golden:
-		_golden.position = Vector2(210, 8)
-		_golden.size = Vector2(300, 26)
+		_golden.position = Vector2(left, 8)
+		_golden.size = Vector2(span, 26)
 	if _dark:
-		_dark.position = Vector2(560, 8)
-		_dark.size = Vector2(300, 26)
+		_dark.position = Vector2(left + span + 16.0, 8)
+		_dark.size = Vector2(span, 26)
 	if _golden_l:
-		_golden_l.position = Vector2(210, 36)
+		_golden_l.position = Vector2(left, 36)
 	if _dark_l:
-		_dark_l.position = Vector2(560, 36)
-	if _clock:
-		_clock.position = Vector2(980, 12)
-		_clock.size = Vector2(460, 28)
+		_dark_l.position = Vector2(left + span + 16.0, 36)
 	if _room:
-		_room.position = Vector2(210, 56)
-		_room.size = Vector2(760, 24)
-	var cmd_y := h - 100.0
-	var stance_y := h - 80.0
-	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
-	for i in cmds.size():
-		if not _bar.has(cmds[i]):
-			continue
-		var btn: Button = _bar[cmds[i]]
-		btn.position = Vector2(748 + i * 104, cmd_y)
-		btn.size = Vector2(100, 88)
-	for i in _stances.keys():
-		var stance: Button = _stances[i]
-		stance.position = Vector2(210 + int(i) * 98, stance_y)
-		stance.size = Vector2(90, 48)
-	if _scatter:
-		_scatter.position = Vector2(520, stance_y)
-		_scatter.size = Vector2(100, 48)
-	if _phalanx:
-		_phalanx.position = Vector2(628, stance_y)
-		_phalanx.size = Vector2(100, 48)
-	if _feed:
-		_feed.position = Vector2(210, h - 176.0)
-		_feed.size = Vector2(520, 56)
-	_place_acts(false, w, h)
-	_place_zoom(h)
+		_room.position = Vector2(left, 56)
+		_room.size = Vector2(maxi(right - left, 160.0), 22)
+	if _clock:
+		_clock.position = Vector2(maxi(left, pause_x - 118.0), 78)
+		_clock.size = Vector2(110, 26)
 	if _aggro:
-		_aggro.position = Vector2(210, 78)
-		_aggro.size = Vector2(minf(760.0, w - 420.0), 24)
+		_aggro.position = Vector2(left, 78)
+		_aggro.size = Vector2(maxi(pause_x - left - 130.0, 120.0), 24)
+
+
+func _layout_wide(w: float, h: float) -> void:
+	_place_meters(w)
+	var act_y := h - 164.0
+	var util_y := h - 96.0
+	_place_row(_util_buttons(), util_y, 72.0, w, 8.0)
+	_place_acts(act_y, 64.0, w, 8.0)
+	var coach_y := h - 232.0
+	if _feed:
+		_feed.position = Vector2(210, coach_y - 36.0)
+		_feed.size = Vector2(maxi(w - 380.0, 200.0), 32)
 	if _passive:
-		_passive.position = Vector2(210, h - 252.0)
-		_passive.size = Vector2(760, 22)
+		_passive.position = Vector2(210, coach_y - 18.0)
+		_passive.size = Vector2(maxi(w - 380.0, 200.0), 18)
 	if _coach_bg:
-		_coach_bg.position = Vector2(210, h - 224.0)
-		_coach_bg.size = Vector2(1040, 40)
+		_coach_bg.position = Vector2(210, coach_y)
+		_coach_bg.size = Vector2(maxi(w - 210.0 - 156.0, 80.0), 64)
 	if _coach:
-		_coach.position = Vector2(218, h - 218.0)
-		_coach.size = Vector2(860, 32)
+		_coach.position = Vector2(218, coach_y + 16.0)
+		_coach.size = Vector2(maxi(w - 400.0, 80.0), 32)
 	if _hide:
-		_hide.position = Vector2(1090, h - 222.0)
-		_hide.size = Vector2(150, 36)
+		_hide.position = Vector2(w - 148.0, coach_y)
+		_hide.size = Vector2(140, 64)
+	_place_column()
 
 
 func _layout_narrow(w: float, h: float) -> void:
-	var bar_w := maxf(140.0, (w - 420.0) * 0.5 - 8.0)
-	if _golden:
-		_golden.position = Vector2(210, 8)
-		_golden.size = Vector2(bar_w, 26)
-	if _dark:
-		_dark.position = Vector2(226.0 + bar_w, 8)
-		_dark.size = Vector2(bar_w, 26)
-	if _golden_l:
-		_golden_l.position = Vector2(210, 36)
-	if _dark_l:
-		_dark_l.position = Vector2(226.0 + bar_w, 36)
-	if _clock:
-		_clock.position = Vector2(210, 84)
-		_clock.size = Vector2(maxi(w - 420.0, 180.0), 26)
-	if _room:
-		_room.position = Vector2(210, 56)
-		_room.size = Vector2(maxi(w - 420.0, 200.0), 24)
-	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
-	var cmd_y := h - 116.0
-	var cmd_w := 100.0
-	var gap := 8.0
-	var cmd_total := cmds.size() * cmd_w + (cmds.size() - 1) * gap
-	if cmd_total > w - 16.0:
-		cmd_w = floor((w - 16.0 - (cmds.size() - 1) * gap) / float(cmds.size()))
-		cmd_total = cmds.size() * cmd_w + (cmds.size() - 1) * gap
-	var x := (w - cmd_total) * 0.5
-	for i in cmds.size():
-		if not _bar.has(cmds[i]):
+	_place_meters(w)
+	var coach_y := h - 300.0
+	var act_y := h - 160.0
+	var util_y := h - 92.0
+	_place_acts(act_y, 64.0, w, 8.0)
+	_place_row(_util_buttons(), util_y, 72.0, w, 8.0)
+	if _feed:
+		_feed.position = Vector2(16, coach_y - 20.0)
+		_feed.size = Vector2(w - 32.0, 18)
+	if _passive:
+		_passive.position = Vector2(16, coach_y - 20.0)
+		_passive.size = Vector2(w - 32.0, 18)
+	if _coach_bg:
+		_coach_bg.position = Vector2(16, coach_y)
+		_coach_bg.size = Vector2(maxi(w - 180.0, 80.0), 64)
+	if _coach:
+		_coach.position = Vector2(24, coach_y + 16.0)
+		_coach.size = Vector2(maxi(w - 210.0, 80.0), 32)
+	if _hide:
+		_hide.position = Vector2(w - 148.0, coach_y)
+		_hide.size = Vector2(132, 64)
+	_place_column()
+
+
+func _place_column() -> void:
+	var order := ["michael", "raphael", "azrael", "uriel", "gabriel"]
+	var stride := 74.0
+	for i in order.size():
+		if not _portraits.has(order[i]):
 			continue
-		var btn: Button = _bar[cmds[i]]
-		btn.position = Vector2(x, cmd_y)
-		btn.size = Vector2(cmd_w, 88)
-		x += cmd_w + gap
-	var stance_y := h - 176.0
+		var portrait: Button = _portraits[order[i]]
+		portrait.custom_minimum_size = Vector2(176, 70)
+		portrait.position = Vector2(8, 8 + float(i) * stride)
+		portrait.size = Vector2(176, 70)
+	var zoom_y := 8.0 + 5.0 * stride + 8.0
+	if _zoom_l:
+		_zoom_l.position = Vector2(8, zoom_y)
+		_zoom_l.size = Vector2(176, 20)
+	if _zoom_out:
+		_zoom_out.custom_minimum_size = Vector2(84, 64)
+		_zoom_out.position = Vector2(8, zoom_y + 22.0)
+		_zoom_out.size = Vector2(84, 64)
+	if _zoom_in:
+		_zoom_in.custom_minimum_size = Vector2(84, 64)
+		_zoom_in.position = Vector2(100, zoom_y + 22.0)
+		_zoom_in.size = Vector2(84, 64)
+
+
+func _stance_buttons() -> Array:
 	var row: Array = []
 	for i in [0, 1, 2]:
 		if _stances.has(i):
@@ -536,46 +558,33 @@ func _layout_narrow(w: float, h: float) -> void:
 		row.append(_scatter)
 	if _phalanx:
 		row.append(_phalanx)
-	var row_w := 0.0
-	for b in row:
-		row_w += b.size.x
-	if row.size() > 1:
-		row_w += gap * float(row.size() - 1)
-	var sx := (w - row_w) * 0.5
-	for b2 in row:
-		var stance: Button = b2
-		stance.position = Vector2(sx, stance_y)
-		sx += stance.size.x + gap
-	if _feed:
-		_feed.position = Vector2(16, h - 306.0)
-		_feed.size = Vector2(w - 32.0, 18)
-	if _passive:
-		_passive.position = Vector2(16, h - 306.0)
-		_passive.size = Vector2(w - 32.0, 18)
-	if _coach_bg:
-		_coach_bg.position = Vector2(16, h - 284.0)
-		_coach_bg.size = Vector2(w - 180.0, 32)
-	if _coach:
-		_coach.position = Vector2(24, h - 280.0)
-		_coach.size = Vector2(maxi(w - 210.0, 80.0), 24)
-	if _hide:
-		_hide.position = Vector2(w - 156.0, h - 284.0)
-		_hide.size = Vector2(140, 32)
-	_place_acts(true, w, h)
-	_place_zoom(h)
-	if _aggro:
-		_aggro.position = Vector2(210, 78)
-		_aggro.size = Vector2(maxi(w - 430.0, 180.0), 24)
+	return row
 
 
-func _place_zoom(h: float) -> void:
-	var y := minf(8.0 + 5.0 * 96.0 + 8.0, h - 420.0)
-	if _zoom_out:
-		_zoom_out.position = Vector2(8, y)
-		_zoom_out.size = Vector2(88, 64)
-	if _zoom_in:
-		_zoom_in.position = Vector2(104, y)
-		_zoom_in.size = Vector2(88, 64)
+func _util_buttons() -> Array:
+	var row := _stance_buttons()
+	for cmd in ["shield", "heal", "cleanse", "detect", "burst"]:
+		if _bar.has(cmd):
+			row.append(_bar[cmd])
+	return row
+
+
+func _place_row(buttons: Array, y: float, bh: float, w: float, left: float) -> void:
+	var n := buttons.size()
+	if n == 0:
+		return
+	var gap := 8.0
+	var avail := w - left - 8.0 - gap * float(n - 1)
+	var bw: float = floor(avail / float(n))
+	if bw < 64.0:
+		bw = 64.0
+	var x := left
+	for b in buttons:
+		var btn: Button = b
+		btn.custom_minimum_size = Vector2(bw, bh)
+		btn.position = Vector2(x, y)
+		btn.size = Vector2(bw, bh)
+		x += bw + gap
 
 
 func _build_portraits() -> void:
@@ -588,7 +597,7 @@ func _build_portraits() -> void:
 		"gabriel": Color(0.4, 0.32, 0.12),
 	}
 	for i in order.size():
-		var b := _btn(order[i].capitalize(), Vector2(8, 8 + i * 96), Vector2(188, 90), _on_portrait.bind(order[i]))
+		var b := _btn(order[i].capitalize(), Vector2(8, 8 + i * 74), Vector2(176, 70), _on_portrait.bind(order[i]))
 		var sb := b.get_theme_stylebox("normal").duplicate()
 		sb.bg_color = colors[order[i]]
 		b.add_theme_stylebox_override("normal", sb)
@@ -598,8 +607,8 @@ func _build_portraits() -> void:
 			hover.bg_color = colors[order[i]].lightened(0.15)
 			b.add_theme_stylebox_override("hover", hover)
 		_portraits[order[i]] = b
-		_hp[order[i]] = _hp_bar(b, Vector2(10, 48), Vector2(168, 12))
-		_threat[order[i]] = _hp_bar(b, Vector2(10, 66), Vector2(168, 10))
+		_hp[order[i]] = _hp_bar(b, Vector2(8, 42), Vector2(160, 8))
+		_threat[order[i]] = _hp_bar(b, Vector2(8, 54), Vector2(160, 6))
 		_paint(_threat[order[i]], Color(0.95, 0.55, 0.2))
 
 
@@ -619,7 +628,7 @@ func _build_brief() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brief.add_child(title)
 	var l := Label.new()
-	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Mend, Strike, and Sunstrike sit on the bar. Tap a foe to focus. Tap a hero, then Mend, to heal that one.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nStanding in a cleared room feeds the demon.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
+	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Heal, Team, Strike, and Sunstrike sit on the bar. Team heals every living angel.\nHeal arms Raphael's single heal; tap a hero to cast it. Zoom − and + sit under the portraits.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nThe antechamber is quiet. The first fight starts in the next room.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
 	l.position = Vector2(170, 104)
 	l.size = Vector2(940, 470)
 	l.clip_text = true
@@ -792,6 +801,11 @@ func _on_cmd(cmd: String) -> void:
 
 
 func _on_act(which: String) -> void:
+	if which == "team":
+		if game != null:
+			game.armed = ""
+		game.command("ability", {"name": "party_heal"})
+		return
 	var ability := ""
 	match which:
 		"taunt":
@@ -820,6 +834,7 @@ func _refresh_acts(snap: Dictionary) -> void:
 	var mapped := {
 		"taunt": "taunt",
 		"mend": "single_heal",
+		"team": "party_heal",
 		"strike": "strike",
 		"sunstrike": "sunstrike",
 	}
@@ -832,32 +847,13 @@ func _refresh_acts(snap: Dictionary) -> void:
 		_apply_ability_button(_acts[key], info)
 
 
-func _place_acts(narrow: bool, w: float, h: float) -> void:
-	var names := ["taunt", "mend", "strike", "sunstrike"]
-	if narrow:
-		var cmd_w := 100.0
-		var gap := 8.0
-		var count := names.size()
-		var total := float(count) * cmd_w + float(count - 1) * gap
-		if total > w - 16.0:
-			cmd_w = floor((w - 16.0 - float(count - 1) * gap) / float(count))
-			total = float(count) * cmd_w + float(count - 1) * gap
-		var x := (w - total) * 0.5
-		var y := h - 244.0
-		for i in names.size():
-			if not _acts.has(names[i]):
-				continue
-			var btn: Button = _acts[names[i]]
-			btn.position = Vector2(x, y)
-			btn.size = Vector2(cmd_w, 64)
-			x += cmd_w + gap
-		return
-	for i in names.size():
-		if not _acts.has(names[i]):
-			continue
-		var wide: Button = _acts[names[i]]
-		wide.position = Vector2(748 + i * 130, h - 180.0)
-		wide.size = Vector2(122, 72)
+func _place_acts(y: float, bh: float, w: float, left: float) -> void:
+	var names := ["taunt", "mend", "team", "strike", "sunstrike"]
+	var row: Array = []
+	for name in names:
+		if _acts.has(name):
+			row.append(_acts[name])
+	_place_row(row, y, bh, w, left)
 
 
 func _on_portrait(subtype: String) -> void:
@@ -887,6 +883,8 @@ func _paint_armed() -> void:
 				want = "taunt"
 			"mend":
 				want = "single_heal"
+			"team":
+				want = "party_heal"
 			"strike":
 				want = "strike"
 			"sunstrike":

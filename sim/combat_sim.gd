@@ -2137,7 +2137,9 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 			_interrupt_revive(target)
 	else:
 		stats.damage_dealt += dealt
-	_popup(target.pos, str(dealt), "bad" if str(target.team) == "angel" else "good")
+	# Angel damage is "bad" (red). Foe damage is "dmg" (yellow), not "good",
+	# so a hit does not read as a heal. Heals stay "good" (green).
+	_popup(target.pos, str(dealt), "bad" if str(target.team) == "angel" else "dmg")
 	if int(target.hp) <= 0:
 		_die(target)
 	return dealt
@@ -3156,13 +3158,20 @@ func _update_aggro(m: Dictionary) -> void:
 
 
 func _angel_provokes(m: Dictionary) -> bool:
+	# Same-room used to pull at any distance. The summoned door is 11 tiles
+	# from the garrison, past the 9.8 leash, so a single step onto the
+	# threshold pulled the pack and the next step back into the corridor
+	# dropped it. That one-tick fight is the "came on and went" bug. A room
+	# pull now requires leash range. Proximity (aggro) is unchanged, and the
+	# antechamber stays quiet because nothing is garrisoned there.
 	var mroom := map.id_at_tile(Fixed.tile_of(m.pos))
 	for a in _angels():
 		if not a.alive or int(a.get("untargetable_until", 0)) > tick:
 			continue
-		if Fixed.dist(a.pos, m.pos) <= Balance.AGGRO_RANGE:
+		var dist := Fixed.dist(a.pos, m.pos)
+		if dist <= Balance.AGGRO_RANGE:
 			return true
-		if mroom != "" and not _room_corridor(mroom) and map.id_at_tile(Fixed.tile_of(a.pos)) == mroom:
+		if mroom != "" and not _room_corridor(mroom) and map.id_at_tile(Fixed.tile_of(a.pos)) == mroom and dist <= Balance.LEASH_RANGE:
 			return true
 	return false
 
