@@ -5,11 +5,17 @@ extends RefCounted
 const TICK_HZ := 20
 const MILLI := 1000
 const ELIXIR_MAX := 10000
-# Opening Golden covers Shield (3) and a Heal (1.5) and still leaves half a point,
-# so the first fight is a choice. Regen itself is unchanged: the crawl's length
-# is the road, and speeding the curve would pull a competent run under 8 minutes.
-const GOLDEN_START := 5000
+# Opening Golden covers Shield (3) and a Heal (1.5) and still leaves 2.0,
+# enough for a Cleanse (1.5) or one 2.0 active, not a Burst (3).
+# Was 5000 (a 0.5 cushion) in 1.0.0. Regen itself is unchanged: the crawl's
+# length is the road, and speeding the curve would pull a competent run under 8 minutes.
+const GOLDEN_START := 6500
 const DARK_START := 4200
+# 8 seconds. Until the first angel command resolves, or this many ticks pass,
+# Dark regen is frozen and the turtle clock does not advance. Golden still
+# regens, and the director still spends its opening bank. A party that moves
+# on the first tick never sees the hold.
+const OPENING_GRACE_TICKS := 160
 
 # Milli-elixir per tick. Index is the stage reached (0 descent … 3 approach).
 # Index 4 is the Lucifer phase. Each step's gain is larger than the last,

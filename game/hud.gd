@@ -42,6 +42,12 @@ var _coach: Label
 var _hide: Button
 var _coach_off := false
 var _inspect := ""
+var _menu: Button
+var _menu_dim: ColorRect
+var _menu_restart: Button
+var _menu_title: Button
+var _menu_resume: Button
+var _menu_held_pause := false
 var _speed_i := 0
 const _SPEEDS := [1.0, 2.0, 3.0]
 
@@ -81,6 +87,7 @@ func build() -> void:
 	_hide = _btn("Hide hints", Vector2(1000, 498), Vector2(150, 36), _on_hide_hints)
 	_pause = _btn("Pause", Vector2(1088, 8), Vector2(90, 40), _on_pause)
 	_speed = _btn("1x", Vector2(1188, 8), Vector2(76, 40), _on_speed)
+	_menu = _btn("Menu", Vector2(1088, 52), Vector2(176, 64), _on_menu)
 	var names := ["Tight", "Spread", "Column"]
 	for i in names.size():
 		var b := _btn(names[i], Vector2(210 + i * 98, 640), Vector2(90, 48), _on_stance.bind(i))
@@ -94,6 +101,7 @@ func build() -> void:
 	_build_portraits()
 	_build_brief()
 	_build_end()
+	_build_menu()
 	_layout_bottom()
 
 
@@ -113,6 +121,9 @@ func on_new_run(to_title: bool) -> void:
 		_brief.mouse_filter = Control.MOUSE_FILTER_STOP if to_title else Control.MOUSE_FILTER_IGNORE
 	if _pause:
 		_pause.text = "Pause"
+	if _menu_dim:
+		_menu_dim.visible = false
+	_menu_held_pause = false
 	_layout_bottom()
 
 
@@ -261,6 +272,11 @@ func refresh(snap: Dictionary) -> void:
 			btn3.text = "%s\n%d%s" % [subtype.capitalize(), int(hs.hp), flags]
 			btn3.modulate = Color(1, 1, 1)
 	_show_coach(snap)
+	var in_run := game != null and not bool(game.briefing) and str(snap.outcome) == ""
+	if _menu:
+		_menu.visible = in_run
+	if _menu_dim and not in_run:
+		_menu_dim.visible = false
 	for cmd in _bar.keys():
 		if not bool(_bar[cmd].has_meta("flash_until")) or int(_bar[cmd].get_meta("flash_until")) <= Time.get_ticks_msec():
 			_bar[cmd].modulate = Color(1, 1, 1)
@@ -309,55 +325,9 @@ func _show_coach(snap: Dictionary) -> void:
 
 
 func _coach_line(snap: Dictionary) -> String:
-	var tg: Dictionary = snap.get("telegraph", {})
-	if not tg.is_empty():
-		match str(tg.get("name", "")):
-			"hell_rain":
-				return "Hell rain — leave the red circles, or Scatter."
-			"cleave":
-				return "Cleave — step out of the orange lane."
-			"judgment":
-				return "Judgment — Shield or Body Block the marked angel."
-			"grasp":
-				return "Grasp — Phalanx refuses the pull."
-			_:
-				return "A blow is marked. Act before the bar fills."
-	if int(snap.get("transform_until", 0)) > int(snap.tick):
-		return "Lucifer is rising. Four marked blows come next."
-	var curses: Array = snap.get("curses", [])
-	if not curses.is_empty():
-		var curse: Dictionary = curses[0]
-		return "%s — %s. Cleanse before the bar fills." % [str(curse.subtype).capitalize(), str(curse.name)]
-	var commits: Array = snap.get("commitments", [])
-	if not commits.is_empty():
-		if str(commits[0].get("plan", "")) == "elite":
-			return "An elite is arming. The bar is the tell."
-		return "A trap cluster is arming. The bar is the tell."
-	var stake := str(snap.get("stake_id", ""))
-	if stake != "" and not _stake_done(snap, stake) and int(snap.get("boss_hp_max", 0)) <= 0:
-		return "Hold the gold node to claim %s." % str(snap.get("stake_name", "the stake"))
-	for ex in snap.get("exits", []):
-		if str(ex.get("hint", "")) in ["Still air", "Skittering", "Whispers"]:
-			return "Still air = traps, Skittering = summons, Whispers = curses. A tap locks 3s."
-	if str(snap.party_room) == "start" and int(snap.tick) < 200:
-		return "Tap the floor. The five angels move as one squad."
-	if int(snap.tick) < 500:
-		return "Shield, Heal, Cleanse, Detect, Burst. Tap a portrait for that angel's kit."
-	if int(snap.tick) < 900:
-		return "Tight, Spread, or Column is the bet. Scatter and Phalanx are the reactions."
-	return ""
-
-
-func _stake_done(snap: Dictionary, stake: String) -> bool:
-	match stake:
-		"seal":
-			return bool(snap.get("seal_done", false))
-		"font":
-			return bool(snap.get("font_done", false))
-		"altar":
-			return bool(snap.altar_done)
-		_:
-			return false
+	if game == null or game.board == null or not game.board.has_method("guide"):
+		return ""
+	return str(game.board.guide(snap).get("line", ""))
 
 
 func _layout_bottom() -> void:
@@ -375,6 +345,19 @@ func _layout_bottom() -> void:
 		_layout_narrow(w, h)
 	else:
 		_layout_wide(w, h)
+	if _menu:
+		_menu.position = Vector2(w - 192.0, 52)
+		_menu.size = Vector2(176, 64)
+	if _menu_restart:
+		var mx := (w - 320.0) * 0.5
+		_menu_restart.position = Vector2(mx, h * 0.36)
+		_menu_restart.size = Vector2(320, 72)
+	if _menu_title:
+		_menu_title.position = Vector2((w - 320.0) * 0.5, h * 0.36 + 84.0)
+		_menu_title.size = Vector2(320, 64)
+	if _menu_resume:
+		_menu_resume.position = Vector2((w - 320.0) * 0.5, h * 0.36 + 160.0)
+		_menu_resume.size = Vector2(320, 64)
 	if _begin:
 		_begin.position = Vector2((w - 320.0) * 0.5, h - 108.0)
 		_begin.size = Vector2(320, 72)
@@ -458,8 +441,8 @@ func _layout_narrow(w: float, h: float) -> void:
 	if _dark_l:
 		_dark_l.position = Vector2(226.0 + bar_w, 36)
 	if _clock:
-		_clock.position = Vector2(w - 150.0, 54)
-		_clock.size = Vector2(140, 28)
+		_clock.position = Vector2(210, 84)
+		_clock.size = Vector2(maxi(w - 420.0, 180.0), 26)
 	if _room:
 		_room.position = Vector2(210, 56)
 		_room.size = Vector2(maxi(w - 420.0, 200.0), 24)
@@ -554,7 +537,7 @@ func _build_brief() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brief.add_child(title)
 	var l := Label.new()
-	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nStanding in a cleared room feeds the demon.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses."
+	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nStanding in a cleared room feeds the demon.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
 	l.position = Vector2(170, 104)
 	l.size = Vector2(940, 470)
 	l.clip_text = true
@@ -620,6 +603,51 @@ func _passive_line(subtype: String) -> String:
 			return "Gabriel — passive: a small damage aura for the whole party."
 		_:
 			return ""
+
+
+func _build_menu() -> void:
+	_menu.visible = false
+	_menu_dim = ColorRect.new()
+	_menu_dim.color = Color(0.03, 0.02, 0.06, 0.88)
+	_menu_dim.visible = false
+	_menu_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_menu_dim)
+	var title := Label.new()
+	title.text = "Siege menu"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.position = Vector2(280, 150)
+	title.size = Vector2(720, 48)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.add_theme_font_size_override("font_size", 36)
+	title.add_theme_color_override("font_color", Color(0.96, 0.86, 0.55))
+	_menu_dim.add_child(title)
+	_menu_restart = _btn("Restart run", Vector2(480, 250), Vector2(320, 72), _on_menu_restart, _menu_dim)
+	_gold_button(_menu_restart)
+	_menu_title = _btn("Title", Vector2(480, 334), Vector2(320, 64), _on_menu_title, _menu_dim)
+	_menu_resume = _btn("Resume", Vector2(480, 410), Vector2(320, 64), _on_menu_resume, _menu_dim)
+
+
+func _on_menu() -> void:
+	_menu_held_pause = game.paused
+	game.paused = true
+	_menu_dim.visible = true
+	_layout_bottom()
+
+
+func _on_menu_resume() -> void:
+	_menu_dim.visible = false
+	game.paused = _menu_held_pause
+
+
+func _on_menu_restart() -> void:
+	_menu_dim.visible = false
+	game.restart()
+
+
+func _on_menu_title() -> void:
+	_menu_dim.visible = false
+	game.title()
 
 
 func _on_begin() -> void:

@@ -6,7 +6,7 @@ class_name BoardView
 const TILE_W := 64.0
 const TILE_H := 32.0
 const INSET_L := 196.0
-const INSET_T := 112.0
+const INSET_T := 120.0
 const INSET_B := 236.0
 const INSET_R := 8.0
 const NARROW_W := 1200.0
@@ -69,9 +69,37 @@ var zoom := 1.0
 var cam_ready := false
 
 
+var guide_drawn := false
+
+
 func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The play field claims taps the HUD widgets do not. Godot delivers
+	# InputEventScreenTouch to this control; a full-rect IGNORE sibling lets
+	# them fall through to whatever STOP control is behind it.
+	mouse_filter = Control.MOUSE_FILTER_STOP
 	RenderingServer.canvas_item_set_clip(get_canvas_item(), true)
+
+
+func _gui_input(event: InputEvent) -> void:
+	if game == null:
+		return
+	if event is InputEventScreenDrag:
+		game.note_drag(event.position)
+		accept_event()
+		return
+	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		game.note_drag(event.position)
+		accept_event()
+		return
+	var tap := false
+	if event is InputEventScreenTouch and event.pressed:
+		tap = true
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		tap = true
+	if not tap:
+		return
+	game.note_tap(event.position)
+	accept_event()
 
 
 func handle_tap(screen: Vector2) -> void:
@@ -112,9 +140,27 @@ func handle_tap(screen: Vector2) -> void:
 	if not best.is_empty():
 		game.command("move_room", {"room": str(best.dest)})
 		return
-	var tile := _nearest_walkable(milli)
-	if tile.x >= 0:
+	var tile := Fixed.tile_of(milli)
+	var snapped := false
+	if game.sim.map.at(tile) < 0:
+		tile = _nearest_walkable(milli)
+		snapped = true
+	if tile.x >= 0 and game.sim.map.at(tile) >= 0:
+		var here := Fixed.tile_of(snap.anchor)
+		var door := _exit_on(tile)
+		if snapped and (tile == here or not door.is_empty()):
+			var toward := door if not door.is_empty() else _next_exit(milli)
+			if not toward.is_empty():
+				game.command("move_room", {"room": str(toward.dest)})
+				return
+		if not door.is_empty():
+			game.command("move_room", {"room": str(door.dest)})
+			return
 		game.command("move_tile", {"tile": tile})
+		return
+	var fallback := _next_exit(milli)
+	if not fallback.is_empty():
+		game.command("move_room", {"room": str(fallback.dest)})
 
 
 func handle_drag(screen: Vector2) -> void:
@@ -123,6 +169,211 @@ func handle_drag(screen: Vector2) -> void:
 	if not playfield_rect().has_point(screen):
 		return
 	game.command("steer", {"pos": _screen_to_milli(screen)})
+
+
+const SNAP_RADIUS := 16
+
+
+func _nearest_walkable(milli: Vector2i) -> Vector2i:
+	var origin := Fixed.tile_of(milli)
+	var map = game.sim.map
+	var best := Vector2i(-1, -1)
+	var best_d := 1 << 30
+	for dy in range(-SNAP_RADIUS, SNAP_RADIUS + 1):
+		for dx in range(-SNAP_RADIUS, SNAP_RADIUS + 1):
+			var t := origin + Vector2i(dx, dy)
+			if map.at(t) < 0:
+				continue
+			var d := Fixed.dist(milli, Fixed.tile_center(t))
+			if d < best_d:
+				best_d = d
+				best = t
+	return best
+
+
+func _exit_on(tile: Vector2i) -> Dictionary:
+	for ex in snap.exits:
+		if ex.tile == tile:
+			return ex
+	return {}
+
+
+func _next_exit(milli: Vector2i) -> Dictionary:
+	var best := {}
+	var best_d := 1 << 30
+	for ex in snap.exits:
+		var d := Fixed.dist(milli, Fixed.tile_center(ex.tile))
+		if d < best_d:
+			best_d = d
+			best = ex
+	return best
+
+
+## One objective for the coach line and the arrow. View-only; never submits.
+func guide(snap_in: Dictionary) -> Dictionary:
+	var empty := {"line": "", "at": Vector2i.ZERO, "kind": ""}
+	if snap_in.is_empty() or game == null:
+		return empty
+	var line := ""
+	var at := Vector2i.ZERO
+	var kind := ""
+	var tg: Dictionary = snap_in.get("telegraph", {})
+	if not tg.is_empty():
+		kind = "tell"
+		match str(tg.get("name", "")):
+			"hell_rain":
+				line = "Hell rain — leave the red circles, or Scatter."
+				var marks: Array = snap_in.get("hell_rain", [])
+				if not marks.is_empty():
+					at = marks[0].pos
+			"cleave":
+				line = "Cleave — step out of the orange lane."
+				at = tg.get("end", Vector2i.ZERO)
+			"judgment":
+				line = "Judgment — Shield or Body Block the marked angel."
+			"grasp":
+				line = "Grasp — Phalanx refuses the pull."
+			_:
+				line = "A blow is marked. Act before the bar fills."
+		if at == Vector2i.ZERO:
+			at = _door_at(snap_in)
+		return {"line": line, "at": at, "kind": kind}
+	if int(snap_in.get("transform_until", 0)) > int(snap_in.tick):
+		return {"line": "Lucifer is rising. Four marked blows come next.", "at": _door_at(snap_in), "kind": "tell"}
+	var curses: Array = snap_in.get("curses", [])
+	if not curses.is_empty():
+		var curse: Dictionary = curses[0]
+		return {
+			"line": "%s — %s. Cleanse before the bar fills." % [str(curse.subtype).capitalize(), str(curse.name)],
+			"at": curse.pos,
+			"kind": "curse",
+		}
+	var commits: Array = snap_in.get("commitments", [])
+	if not commits.is_empty():
+		var text := "An elite is arming. The bar is the tell."
+		if str(commits[0].get("plan", "")) != "elite":
+			text = "A trap cluster is arming. The bar is the tell."
+		return {"line": text, "at": commits[0].pos, "kind": "commit"}
+	var foes := _foes_here(snap_in)
+	if not foes.is_empty():
+		var nearest: Dictionary = foes[0]
+		var best_d := Fixed.dist(snap_in.anchor, nearest.pos)
+		for foe in foes:
+			var d := Fixed.dist(snap_in.anchor, foe.pos)
+			if d < best_d:
+				best_d = d
+				nearest = foe
+		return {"line": "Clear the room — tap a foe to focus fire.", "at": nearest.pos, "kind": "clear"}
+	var stake := str(snap_in.get("stake_id", ""))
+	if stake != "" and not _stake_done(snap_in, stake) and int(snap_in.get("boss_hp_max", 0)) <= 0:
+		var node: Vector2i = game.sim.map.node_tile("%s:rear" % stake)
+		var spot := Fixed.tile_center(node) if node.x >= 0 else _door_at(snap_in)
+		return {"line": "Claim the stake — hold the gold node.", "at": spot, "kind": "stake"}
+	var gold := int(snap_in.get("golden", 0))
+	var hurt := false
+	var heroes: Dictionary = snap_in.get("heroes", {})
+	for subtype in heroes.keys():
+		var hs: Dictionary = heroes[subtype]
+		if bool(hs.get("alive", false)) and int(hs.hp_max) > 0 and int(hs.hp) * 100 / int(hs.hp_max) < 80:
+			hurt = true
+			break
+	if hurt and gold >= Balance.cost("single_heal"):
+		return {"line": "Spend elixir — Shield or Heal.", "at": _door_at(snap_in), "kind": "spend"}
+	line = _move_line(snap_in)
+	return {"line": line, "at": _door_at(snap_in), "kind": "move"}
+
+
+func _move_line(snap_in: Dictionary) -> String:
+	var hinted := false
+	for ex in snap_in.get("exits", []):
+		if str(ex.get("hint", "")) in ["Still air", "Skittering", "Whispers"]:
+			hinted = true
+			break
+	var hold := ""
+	if int(snap_in.get("grace_left", 0)) > 0:
+		hold = " Demon holds %0.0fs." % (float(snap_in.grace_left) / 20.0)
+	if hinted:
+		return "Move here — Tap a door. Still air = traps, Skittering = summons, Whispers = curses. A tap locks 3s.%s" % hold
+	return "Move here — Tap the lit doorway. The squad moves as one.%s" % hold
+
+
+func _foes_here(snap_in: Dictionary) -> Array:
+	var here := str(snap_in.get("party_room", ""))
+	var out: Array = []
+	for foe in snap_in.get("foes", []):
+		if game.sim.map.id_at_tile(Fixed.tile_of(foe.pos)) == here:
+			out.append(foe)
+	return out
+
+
+func _stake_done(snap_in: Dictionary, stake: String) -> bool:
+	match stake:
+		"seal":
+			return bool(snap_in.get("seal_done", false))
+		"font":
+			return bool(snap_in.get("font_done", false))
+		"altar":
+			return bool(snap_in.altar_done)
+		_:
+			return false
+
+
+func _door_at(snap_in: Dictionary) -> Vector2i:
+	if snap_in.get("path", []) is Array and not snap_in.path.is_empty():
+		var last: Vector2i = snap_in.path[snap_in.path.size() - 1]
+		return Fixed.tile_center(last)
+	var best := Vector2i.ZERO
+	var best_d := 1 << 30
+	var anchor: Vector2i = snap_in.anchor
+	for ex in snap_in.get("exits", []):
+		var c := Fixed.tile_center(ex.tile)
+		var d := Fixed.dist(anchor, c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+func _draw_guide(font) -> void:
+	guide_drawn = false
+	var g := guide(snap)
+	var at: Vector2i = g.at
+	if at == Vector2i.ZERO:
+		return
+	var from := _milli_screen(snap.anchor)
+	var to := _milli_screen(at)
+	var dir := to - from
+	if dir.length() < 24.0:
+		to = from + Vector2(0, -48)
+		dir = to - from
+	dir = dir.normalized()
+	var start := from + dir * 28.0
+	var tip := to - dir * 8.0
+	if start.distance_to(tip) < 12.0:
+		tip = start + dir * 36.0
+	var pulse := 0.72 + 0.28 * sin(float(Time.get_ticks_msec()) / 180.0)
+	var col := Color(1.0, 0.84, 0.22, pulse)
+	draw_line(start, tip, col, 6.0)
+	var side := Vector2(-dir.y, dir.x)
+	var head := PackedVector2Array([
+		tip + dir * 4.0,
+		tip - dir * 16.0 + side * 11.0,
+		tip - dir * 16.0 - side * 11.0,
+	])
+	draw_colored_polygon(head, col)
+	if font:
+		var tag := "MOVE"
+		match str(g.kind):
+			"clear":
+				tag = "CLEAR"
+			"stake":
+				tag = "STAKE"
+			"spend":
+				tag = "SPEND"
+			"tell", "curse", "commit":
+				tag = "NOW"
+		_plaque(font, tip + Vector2(12, -8), tag, Color(0.12, 0.08, 0.02), col, 16)
+	guide_drawn = true
 
 
 func _process(_delta: float) -> void:
@@ -147,6 +398,7 @@ func _process(_delta: float) -> void:
 
 
 func _draw() -> void:
+	guide_drawn = false
 	if snap.is_empty() or game == null:
 		return
 	var font := ThemeDB.fallback_font
@@ -256,7 +508,7 @@ func _draw() -> void:
 			var age := int(snap.tick) - int(pop.tick)
 			var colp := Color(1, 0.45, 0.4) if str(pop.kind) == "bad" else Color(0.6, 1, 0.65)
 			draw_string(font, _milli_screen(pop.pos) + Vector2(-8, -18 - age), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, colp)
-	_draw_guide()
+	_draw_guide(font)
 	if str(snap.banner) != "" and font:
 		var bp := view_pos + Vector2(12, 36)
 		_plaque(font, bp, str(snap.banner), Color(1, 0.86, 0.45), Color(0.08, 0.05, 0.03, 0.9), 22)
@@ -581,28 +833,7 @@ func _cull_rect() -> Rect2i:
 	return Rect2i(x0, y0, maxi(x1 - x0, 1), maxi(y1 - y0, 1))
 
 
-## Diamond under the finger if it is walkable, otherwise the nearest walkable tile within 16.
-func _nearest_walkable(milli: Vector2i) -> Vector2i:
-	var origin := Fixed.tile_of(milli)
-	if game.sim.map.at(origin) >= 0:
-		return origin
-	var best := Vector2i(-1, -1)
-	var best_d := 16001
-	for dy in range(-16, 17):
-		for dx in range(-16, 17):
-			var t := origin + Vector2i(dx, dy)
-			if game.sim.map.at(t) < 0:
-				continue
-			var d := Fixed.dist(milli, Fixed.tile_center(t))
-			if d < best_d:
-				best_d = d
-				best = t
-	if best_d > 16000:
-		return Vector2i(-1, -1)
-	return best
-
-
-func _draw_tile_diamond(center: Vector2, col: Color, inset: float = 0.96) -> void:
+func _draw_tile_diamond(center: Vector2, col: Color, inset: float = 0.86) -> void:
 	var hw := TILE_W * 0.5 * zoom * inset
 	var hh := TILE_H * 0.5 * zoom * inset
 	var pts := PackedVector2Array([
@@ -698,59 +929,6 @@ func _draw_trap_actor(trap: Dictionary, font) -> void:
 			_plaque(font, c3 + Vector2(-36, -22), "ECHO  %0.1fs" % (float(remain_a) / 20.0), TELL_COLOR.echo, Color(0.08, 0.04, 0.02, 0.9), 14)
 	elif font:
 		_plaque(font, c3 + Vector2(-28, 26), str(TELL_LABEL.get(kind, kind)), tc, Color(0.05, 0.04, 0.03, 0.88), 13)
-
-
-func _guide_milli() -> Vector2i:
-	if snap.is_empty() or game == null:
-		return Vector2i.ZERO
-	var stake := str(snap.get("stake_id", ""))
-	if stake != "" and not _stake_done(stake) and int(snap.get("boss_hp_max", 0)) <= 0:
-		var node: Vector2i = game.sim.map.node_tile("%s:rear" % stake)
-		if node.x >= 0:
-			return Fixed.tile_center(node)
-	if snap.path is Array and not snap.path.is_empty():
-		var step: Vector2i = snap.path[mini(3, snap.path.size() - 1)]
-		return Fixed.tile_center(step)
-	var best := Vector2i.ZERO
-	var best_d := 1 << 30
-	var anchor: Vector2i = snap.anchor
-	for ex in snap.exits:
-		var c: Vector2i = Fixed.tile_center(ex.tile)
-		var d := Fixed.dist(anchor, c)
-		if d < best_d:
-			best_d = d
-			best = c
-	if best == Vector2i.ZERO or best_d < 400:
-		return Vector2i.ZERO
-	return best
-
-
-func _stake_done(stake: String) -> bool:
-	match stake:
-		"seal":
-			return bool(snap.get("seal_done", false))
-		"font":
-			return bool(snap.get("font_done", false))
-		"altar":
-			return bool(snap.get("altar_done", false))
-		_:
-			return false
-
-
-func _draw_guide() -> void:
-	var target := _guide_milli()
-	if target == Vector2i.ZERO:
-		return
-	var dir := _iso_screen_delta(snap.anchor, target)
-	if dir.length() < 18.0:
-		return
-	dir = dir.normalized()
-	var from := _milli_screen(snap.anchor)
-	var base := from + dir * 30.0
-	var tip := from + dir * 76.0
-	var side := Vector2(-dir.y, dir.x)
-	draw_line(from + dir * 16.0, base, Color(0.98, 0.82, 0.22, 0.85), 3.0)
-	draw_colored_polygon(PackedVector2Array([tip, base + side * 11.0, base - side * 11.0]), Color(0.98, 0.84, 0.28, 0.96))
 
 
 func _boss_pos() -> Vector2i:

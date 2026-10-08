@@ -4,17 +4,17 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M6 (Game feel & loop) — single-player MVP 1.0.0.** The siege is a loop: a start screen holds the clock, a run plays, victory and defeat are different screens, and either one can start a new run or return to the title. Nothing dead-ends. Threats are labeled and color-coded (curses, traps, commitments, Lucifer's four blows, the echo wave). Hits, heals, and button presses are view-layer only — flashes, short particles, and generated tones — and they never call `submit()`. A one-line coach covers movement, doorways, the command bar, stakes, and the boss tells; it can be hidden. The director is unchanged: Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. Opening Golden is 5.0, enough for Shield and a Heal with half a point left. Regen, the road, and Lucifer's health are the same as M5. A scripted competent party reaches Lucifer at 494.6 seconds and wins at 609.7 seconds. The boss is 115.1 seconds. A slower human-style policy, which still claims every stake and answers the blows, wins at 595.8 seconds (boss 96.7 seconds). Walking the short road with auto-attacks only, and skipping the kit and the stakes, dies in the throne at 530.4 seconds. That run's scripted echo was one heavy, trap style. Placeholder shapes and beeps, not final art. No networking yet.
+> **Status: M6 (Game feel & loop) — single-player MVP 1.0.2.** The board is a fixed 2:1 isometric view. Simulation, commands, and the 20 Hz tick are unchanged from 1.0.1. The siege is a loop: a start screen holds the clock, a run plays, victory and defeat are different screens, and either one can start a new run or return to the title. A **Menu** button stays up during the run and can restart or return to the title without waiting for the outcome. Nothing dead-ends. Threats are labeled and color-coded (curses, traps, commitments, Lucifer's four blows, the echo wave). Hits, heals, and button presses are view-layer only — flashes, short particles, and generated tones — and they never call `submit()`. A gold arrow points at the next doorway or objective, and a one-line coach stays visible (move, clear the room, claim the stake, spend elixir, plus the tells) until **Hide hints**. The director is unchanged: Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. Opening Golden is 6.5, enough for Shield and a Heal with 2.0 left (a Cleanse or one 2.0 active, not a Burst). Was 5.0 in 1.0.0. For 8 seconds, or until the first angel command, Dark regen and the idle clock are held; Golden still regens and the director still spends. The regen curve, the road, and Lucifer's health are unchanged. A scripted competent party reaches Lucifer at 492.8 seconds and wins at 599.7 seconds. The boss is 107.0 seconds. A slower human-style policy, which still claims every stake and answers the blows, wins at 596.2 seconds (boss 97.9 seconds). Walking the short road with auto-attacks only, and skipping the kit and the stakes, dies in the throne at 530.4 seconds. That run's scripted echo was one heavy, trap style. Placeholder shapes and beeps, not final art. No networking yet.
 
 ---
 
 ## Play
 
-Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720, and the bottom bar follows a taller 800-tall window). The title screen explains the loop. **Begin the siege** starts the clock. Idle time in a cleared room feeds the demon, so the title does not tick the sim. A one-line coach sits above the command bar until **Hide hints**. Victory and defeat are separate screens. **Siege again** / **Try again** starts a new run. **Title** returns to the start screen. `R` also restarts after the outcome.
+Open the project in Godot 4.7.2 and run `Main.tscn`. Phones open in portrait. The base layout is 1280×720 and expands on a tall screen, and the bottom bar follows a taller window. The board is drawn as 2:1 diamonds. The title screen explains the loop. **Begin the siege** starts the clock. Idle time in a cleared room feeds the demon, so the title does not tick the sim. A gold arrow marks the next doorway, and a one-line coach sits above the command bar until **Hide hints**. **Menu** (top right, under Pause) pauses and offers **Restart run**, **Title**, and **Resume**. Victory and defeat are separate screens. **Siege again** / **Try again** starts a new run. **Title** returns to the start screen. `R` restarts any time after the title.
 
 | Input | Action |
 | --- | --- |
-| Tap ground | Move the squad (deterministic path). |
+| Tap the map | Move the squad. A tap on open ground snaps to the nearest walkable tile, or toward the next lit doorway when that tile is the one the party already occupies. |
 | Tap a doorway | Commit to that branch for 3 seconds. |
 | Tap an enemy | Focus fire. Attacks themselves are automatic. |
 | Portrait | That angel's HP. DOWN counts 3 seconds, then the death is final. |
@@ -26,7 +26,8 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720, and t
 | Scatter Roll / Phalanx Push | Short-cooldown maneuvers. They spend no elixir and work while silenced. |
 | 1–5, Z, X, Q/W/E | Same commands from a keyboard. |
 | 1x button | Cycle lab speed 1x / 2x / 3x. |
-| Space | Pause. R restarts after the outcome panel. |
+| Menu | Pause, then restart the run or return to the title. Visible the whole siege, clear of the command bar. |
+| Space | Pause. R restarts after the title, including mid-run. |
 
 Combat is the sim, not the scene. Angels and demons auto-attack anything in range. Shield, Heal, Cleanse, Detect, and Burst are the only angel buttons; each one routes to the owner and spends Golden Elixir. There is no hand of cards. A lethal hit downs that angel for 3 seconds (the portrait and a ring on the board count it down). Emergency resurrection, Raphael's slow revive, or a banked altar charge can still reach them. When the window closes, the death is final and a full party of final deaths is a wipe. Golden comes from playing (a trap avoided, a cleanse, a kill), Dark from chipping angels, both capped per room. Neither bar drips extra to the side that is behind.
 
@@ -63,7 +64,7 @@ godot --headless --path . --import
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 59 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, the Lucifer transformation, the four telegraphed boss buttons and the kit answers to them, the echo reflecting a trap siege versus a summon siege versus an early transform, the early-descent tradeoff, one echo wave with planted traps still firing, altar revive, the length of the road, director decisions (rooms-gated tiers, reinforcing the next room, commitment and curse telegraphs, Dark spent on a march, the early-descent gamble), a scripted angel policy that can win, the start → defeat → restart → victory → title loop, coach hints, distinct tell colors, juice staying out of the sim, a slower human policy that still wins, and a no-kit march that loses. On the current tune the scripted policy reaches Lucifer at 494.6 seconds and wins at 609.7 seconds. The boss lasts 115.1 seconds. The human-style policy wins at 595.8 seconds. The empty road, stakes included and no demon, is 425.5 seconds and 1280 tiles.
+`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 63 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene (including `InputEventScreenTouch` through the real GUI picker, a tap on non-walkable ground, and focus-fire), the in-run Menu restart/title, the objective arrow and the persistent coach, the 8-second opening hold, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, the Lucifer transformation, the four telegraphed boss buttons and the kit answers to them, the echo reflecting a trap siege versus a summon siege versus an early transform, the early-descent tradeoff, one echo wave with planted traps still firing, altar revive, the length of the road, director decisions (rooms-gated tiers, reinforcing the next room, commitment and curse telegraphs, Dark spent on a march, the early-descent gamble), a scripted angel policy that can win, the start → defeat → restart → victory → title loop, coach hints, distinct tell colors, juice staying out of the sim, a slower human policy that still wins, and a no-kit march that loses. On the current tune the scripted policy reaches Lucifer at 492.8 seconds and wins at 599.7 seconds. The boss lasts 107.0 seconds. The human-style policy wins at 596.2 seconds (boss 97.9 seconds). The empty road, stakes included and no demon, is 425.5 seconds and 1280 tiles.
 
 ---
 
@@ -77,7 +78,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 | `sim/dungeon_map.gd` | Three stages. Each is a fork, three different branches, a reconvergence, and a stake, plus a held nave on the march. |
 | `game/` | Rendering and touch input. Reads snapshots; never decides combat. |
 | `tests/` | Headless suite and the competent-angel policy. |
-| `project.godot` | Godot 4.7, Mobile renderer, landscape 1280×720. |
+| `project.godot` | Godot 4.7, Mobile renderer, portrait, base 1280×720. |
 | `export_presets.cfg` | Android preset named **`Android`**. |
 | `scripts/build-apk.sh` | One-command debug APK. |
 | `.github/workflows/build-apk.yml` | Builds and uploads an APK on push to `main` and on pull requests. |
@@ -85,7 +86,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `1.0.0` (versionCode `8`)
+- App name: `Celestial Q Siege`, version `1.0.2` (versionCode `10`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
@@ -118,8 +119,8 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Portrait inspect is view state. It does not change the sim.
 - Detect is a paid wide pulse, and the same button disarms a revealed trap in range.
 - The Dark bar is visible here so the solo lab is readable. A real 1v1 would hide it.
-- Pacing target is 8–12 minutes. The scripted party hits 609.7 seconds: 494.6 seconds of crawl, 115.1 seconds of Lucifer. A slower policy hits 595.8 seconds and still claims every stake. The marches are the long part. The boss is the climax, about two minutes. Opening Golden is 5.0 so the first Shield still leaves a Heal. The regen curve was not raised; that would pull the crawl under 8 minutes.
-- The director spends Dark on the march (the next room, traps ahead, curses) down toward a per-stage line. The echo is that history, not the cap. Trap-heavy keeps a single heavy and lays echo traps (cap 3, still under the dungeon cap of 4). Summon-heavy adds bodies up to the mob cap. Curse-heavy swings the button pattern toward Judgment and does not cast new curses. Early descent spends 60% of the bank and brings the 2100-health Lucifer. On this tune the healthy scripted run was traps (65 placed, 10 summons, 27 curses) and echoed one heavy plus two echo traps.
+- Pacing target is 8–12 minutes. The scripted party hits 599.7 seconds: 492.8 seconds of crawl, 107.0 seconds of Lucifer. A slower policy hits 596.2 seconds (boss 97.9) and still claims every stake. The marches are the long part. The boss is the climax, about two minutes. Opening Golden is 6.5 (6500 milli): Shield (3.0) and a Heal (1.5) leave 2.0, which pays a Cleanse (1.5) or one 2.0 active and does not pay a Burst (3.0). Was 5.0 (a 0.5 cushion) in 1.0.0. Dark still starts at 4.2. The regen curves were not raised; that would pull the crawl under 8 minutes. `OPENING_GRACE_TICKS` is 160 (8.0s at 20 Hz). Until the first angel command is drained, or tick 160 passes, Dark regen is 0 and the turtle/idle clock does not advance. Golden regen still applies. The director is not paused. A party that commands on the first tick never sees the hold; an idle party is not snowballed for those 8 seconds, then the demon and the turtle resume.
+- The director spends Dark on the march (the next room, traps ahead, curses) down toward a per-stage line. The echo is that history, not the cap. Trap-heavy keeps a single heavy and lays echo traps (cap 3, still under the dungeon cap of 4). Summon-heavy adds bodies up to the mob cap. Curse-heavy swings the button pattern toward Judgment and does not cast new curses. Early descent spends 60% of the bank and brings the 2100-health Lucifer. On this tune the healthy scripted run was traps (67 placed, 10 summons, 26 curses) and echoed one heavy plus two echo traps.
 - Lucifer's buttons are `submit("boss")` commands. The rise is `submit("descend")`. A future human demon issues those same commands. The director only chooses which button, from the pattern the history picked.
 - Scatter Roll holds the shove for 3.5 seconds, long enough to stay out of a 3-second hell rain. Phalanx refuses Grasp. Body-block catches Judgment. None of the four blows kills a healthy angel by itself.
 - Traps the party has already walked past do not keep occupying the global cap of 4. The live cap is the current room plus rooms not yet entered, and each room still holds at most 2.
@@ -133,5 +134,5 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Column eats spikes on the lead angel and suffers longer snares.
 - Purifying shrines from the design's section 19 are not in this build.
 - Feel and audio live in `game/feel.gd` and `game/sfx.gd`. They read snapshots and play generated tones. They do not submit commands. Headless runs build the clips and record the hook without opening an audio device.
-- Victory and defeat are different panels. Restart and Title both call `CombatSim.reset()` through the view, then either begin the next run or show the title. The title does not tick.
+- Victory and defeat are different panels. Restart and Title both call `CombatSim.reset()` through the view, then either begin the next run or show the title. The title does not tick. The in-run Menu uses the same two calls. Opening it sets the view pause; it does not submit a command.
 - Gabriel's kit is cleanse, self-shield, emergency res, plus an always-on party damage aura. The active damage buff was dropped to keep three actives.
