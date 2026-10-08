@@ -461,6 +461,7 @@ func _build_brief() -> void:
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brief.add_child(l)
 	_begin = _btn("Begin the siege", Vector2(480, 612), Vector2(320, 72), _on_begin, _brief)
+	_gold_button(_begin)
 
 
 func _build_end() -> void:
@@ -498,6 +499,7 @@ func _build_end() -> void:
 	_end_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_end.add_child(_end_label)
 	_again = _btn("Siege again", Vector2(480, 470), Vector2(320, 72), _on_restart, _end)
+	_gold_button(_again)
 	_to_title = _btn("Title", Vector2(520, 554), Vector2(240, 64), _on_title, _end)
 
 
@@ -739,6 +741,22 @@ func _label(at: Vector2, text: String, sz: int) -> Label:
 	l.add_theme_constant_override("shadow_offset_y", 1)
 	add_child(l)
 	return l
+
+
+func _gold_button(b: Button) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.62, 0.44, 0.12)
+	normal.border_color = Color(0.98, 0.86, 0.42)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(8)
+	var hover := normal.duplicate()
+	hover.bg_color = Color(0.78, 0.56, 0.16)
+	var pressed := normal.duplicate()
+	pressed.bg_color = Color(0.42, 0.28, 0.08)
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hover)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_font_size_override("font_size", 22)
 
 
 func _btn(text: String, at: Vector2, sz: Vector2, cb: Callable, parent: Node = null) -> Button:

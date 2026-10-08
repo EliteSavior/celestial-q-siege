@@ -64,6 +64,7 @@ var cam_ready := false
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	RenderingServer.canvas_item_set_clip(get_canvas_item(), true)
 
 
 func handle_tap(screen: Vector2) -> void:
@@ -140,6 +141,7 @@ func _draw() -> void:
 	var font := ThemeDB.fallback_font
 	var view_pos := Vector2(INSET_L, INSET_T)
 	var view_size := _view_size()
+	RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(view_pos, view_size))
 	draw_rect(Rect2(view_pos, view_size), Color(0.03, 0.03, 0.05))
 	var map = game.sim.map
 	var vis := {}
