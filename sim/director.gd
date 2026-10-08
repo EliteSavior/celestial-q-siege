@@ -343,7 +343,7 @@ func _exploit_weakness() -> bool:
 	if sim.curse_pending_or_active():
 		return false
 	var stance: int = sim.stance
-	if stance == STANCE_SPREAD and sim.legal_curse("mark", "raphael") == "" and _can_pay(Balance.curse_cost("mark"), 0):
+	if stance == STANCE_SPREAD and not _lobby() and sim.legal_curse("mark", "raphael") == "" and _can_pay(Balance.curse_cost("mark"), 0):
 		sim.submit("curse", {"kind": "mark", "target": "raphael"}, "demon", 1)
 		return true
 	if stance == STANCE_TIGHT:
@@ -464,7 +464,15 @@ func _try_trap(reserved: int, used_nodes: Dictionary) -> int:
 	return cost
 
 
+## The antechamber, the first corridor, and the fork are not a fight yet.
+## Curses there were the unexplained opening damage tick.
+func _lobby() -> bool:
+	return sim.max_depth < 1 and sim.phase != "lucifer"
+
+
 func _try_curse(reserved: int) -> int:
+	if _lobby():
+		return 0
 	if sim._curse_casting() or sim._command_pending("curse"):
 		return 0
 	# Prefer a hero who is clean. Refresh Rot or Mark when the bank is
@@ -489,6 +497,18 @@ func _try_curse(reserved: int) -> int:
 	options.append_array(fresh)
 	options.append_array(refresh)
 	options.append(["weaken", "uriel"])
+	# Michael, Uriel, and Azrael are the named targets. When all three are
+	# dead the vent used to stop, and a healer standing outside leash never
+	# died. Fall back to whoever is still up.
+	var named_ok := false
+	for opt in options:
+		if sim.legal_curse(str(opt[0]), str(opt[1])) == "":
+			named_ok = true
+			break
+	if not named_ok:
+		var last := sim.lowest_angel_subtype()
+		if last != "":
+			options.append(["rot", last])
 	for opt in options:
 		var curse := str(opt[0])
 		var who := str(opt[1])

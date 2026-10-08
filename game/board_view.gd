@@ -80,12 +80,11 @@ var game
 var snap: Dictionary = {}
 var cam := Vector2.ZERO
 var zoom := 1.0
-## 1.0 sat on the room-fit zoom. A little under 1.0 of that fit is the old
-## view; 1.22 starts slightly closer so the squad reads at a glance.
-var user_zoom := 1.22
+## Discrete steps on the room-fit zoom. Index 1 is "the room fits".
+## There is no pinch. The − and + buttons are the only zoom.
+const ZOOM_STEPS: Array[float] = [0.65, 1.0, 1.45, 2.05]
+var zoom_step := 1
 var cam_ready := false
-var _touches := {}
-var _pinch_dist := 0.0
 var _prev_hp := {}
 var _flash_until := {}
 
@@ -101,40 +100,15 @@ func _ready() -> void:
 	RenderingServer.canvas_item_set_clip(get_canvas_item(), true)
 
 
-func apply_pinch_factor(factor: float) -> void:
-	if factor <= 0.01:
-		return
-	user_zoom = clampf(user_zoom * factor, 0.75, 1.9)
-
-
-func _touch_span() -> float:
-	var pts: Array = _touches.values()
-	if pts.size() < 2:
-		return 0.0
-	return (pts[0] as Vector2).distance_to(pts[1] as Vector2)
+func zoom_level() -> float:
+	return ZOOM_STEPS[clampi(zoom_step, 0, ZOOM_STEPS.size() - 1)]
 
 
 func _gui_input(event: InputEvent) -> void:
 	if game == null:
 		return
+	# Pinch and magnify are ignored. Zoom is the on-screen − and + only.
 	if event is InputEventMagnifyGesture:
-		apply_pinch_factor(event.factor)
-		accept_event()
-		return
-	if event is InputEventScreenTouch:
-		if event.pressed:
-			_touches[event.index] = event.position
-		else:
-			_touches.erase(event.index)
-			if _touches.size() < 2:
-				_pinch_dist = 0.0
-			return
-	if event is InputEventScreenDrag and _touches.size() >= 2:
-		_touches[event.index] = event.position
-		var span: float = _touch_span()
-		if _pinch_dist > 8.0 and span > 8.0:
-			apply_pinch_factor(span / _pinch_dist)
-		_pinch_dist = span
 		accept_event()
 		return
 	if event is InputEventScreenDrag:
@@ -491,7 +465,7 @@ func _process(_delta: float) -> void:
 	var bounds := _iso_bounds(rect)
 	var view := _view_size()
 	var fit := minf(view.x / maxf(bounds.size.x, 1.0), view.y / maxf(bounds.size.y, 1.0))
-	zoom = clampf(fit / 1.12 * user_zoom, 0.35, 2.4)
+	zoom = clampf(fit * zoom_level(), 0.2, 4.0)
 	var span := view / zoom
 	var iso := _iso_milli(snap.anchor)
 	var desired := iso - span * 0.5
@@ -821,7 +795,7 @@ func _draw_placeholder(p: Vector2, subtype: String, col: Color, radius: float, f
 
 
 func nudge_zoom(dir: int) -> void:
-	user_zoom = clampf(user_zoom + float(dir) * 0.12, 0.75, 1.9)
+	zoom_step = clampi(zoom_step + dir, 0, ZOOM_STEPS.size() - 1)
 
 
 func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
@@ -871,24 +845,25 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 	_draw_statuses(u, font, p, radius)
 
 
-## Screen-space pills. Read from the snapshot only.
-func _draw_statuses(u: Dictionary, font, anchor: Vector2, radius: float) -> void:
-	if font == null:
-		return
+## Icons above the head. Read from the snapshot only.
+func _draw_statuses(u: Dictionary, _font, anchor: Vector2, radius: float) -> void:
 	var rows: Array = u.get("statuses", [])
 	if rows.is_empty():
 		return
-	var y := anchor.y - radius - 14.0
+	var shown: Array = []
 	for st in rows:
-		if typeof(st) != TYPE_DICTIONARY:
-			continue
-		var text := _status_text(st)
-		var col: Color = STATUS_COLOR.get(str(st.get("id", "")), Color(0.95, 0.92, 0.86))
-		y -= 16.0
-		var bg := Color(0.05, 0.04, 0.08, 0.92)
-		if str(st.get("polarity", "")) == "debuff":
-			bg = Color(0.16, 0.04, 0.06, 0.94)
-		_plaque(font, Vector2(anchor.x - 16.0, y), text, col, bg, 13)
+		if typeof(st) == TYPE_DICTIONARY:
+			shown.append(st)
+		if shown.size() >= 6:
+			break
+	var box := 18.0
+	var gap := 2.0
+	var total_w := float(shown.size()) * box + float(shown.size() - 1) * gap
+	var x := anchor.x - total_w * 0.5
+	var y := anchor.y - radius - 38.0
+	for st in shown:
+		StatusRow.draw_icon(self, Rect2(x, y, box, box), st)
+		x += box + gap
 
 
 func _status_text(st: Dictionary) -> String:

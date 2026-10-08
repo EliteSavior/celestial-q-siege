@@ -111,13 +111,29 @@ const TAUNT_BOOST_PCT := 100
 # their room (corridors do not count — a march is not a pull), or damages them.
 const AGGRO_RANGE := 4200
 const LEASH_RANGE := 9800
-# Damage dealt is threat. 750% puts Michael's autos ahead of the other four
-# angels attacking the same mob. A hard elixir burst, or heals that include
-# overheal, can still pass him. Heals add this percent of the amount cast
-# (not just the health gained), split across mobs already in the fight.
-const TANK_THREAT_MULT := 750
-const HEAL_THREAT_PCT := 100
-# Share of the leader's threat at which the meter calls a pull.
+# Damage dealt is threat. v1.1.2 raised this from 750% to 1600% so Michael's
+# autos stay ahead of the other four angels with real headroom. A hard elixir
+# burst, or a long run of heals that include overheal, can still pass him.
+# Heals add this percent of the amount cast (not just the health gained),
+# split across mobs already in the fight. v1.1.2 cut heal threat from 100%
+# to 35% so a couple of party heals no longer yank the pack.
+# Worked example, one mob, Gabriel's aura included (112%):
+#   Michael auto: dealt 8 → threat 8 * 1600/100 = 128
+#   Party heal: 32 * 35/100 = 11 threat. Twelve heals pass one auto.
+#   Azrael strike: dealt 120 → threat 120, still under one tank auto.
+#   Fresh pull also grants OPENER_THREAT (below) before anyone swings.
+const TANK_THREAT_MULT := 1600
+const HEAL_THREAT_PCT := 35
+# Written onto Michael the moment a mob is pulled, before the first swing,
+# so the pack opens on the tank even if a backliner is standing closer.
+# 480 is about four Azrael strikes (120 each) or forty-three party heals
+# (11 each) of pure excess with no tank damage on top.
+const OPENER_THREAT := 480
+# Bars are percent of Michael's threat on the current pack.
+# Yellow at 70% (near the pull), red at 92% (about to pass him).
+# The meter calls "about to pull" at 85%, unchanged.
+const THREAT_WARN_PCT := 70
+const THREAT_DANGER_PCT := 92
 const THREAT_PULL_PCT := 85
 const SHIELD_WALL_TICKS := 60
 const BODY_BLOCK_TICKS := 80
