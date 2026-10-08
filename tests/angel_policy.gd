@@ -3,7 +3,12 @@ extends RefCounted
 ## It only submits the same commands a player can.
 
 var step := 0
-var plan := ["fork", "summoned", "cross", "altar", "throne"]
+var plan := [
+	"fork", "summoned", "cross", "seal",
+	"fork2", "summoned2", "cross2", "font",
+	"fork3", "summoned3", "cross3", "altar",
+	"throne",
+]
 var pulsed := {}
 
 
@@ -86,19 +91,20 @@ func _offense(sim) -> void:
 func _move(sim) -> void:
 	if sim.phase == "lucifer":
 		return
-	if bool(sim.channeling_altar):
-		return
-	if sim.altar_done and sim.lowest_angel_hp_pct() < 70:
-		return
 	var room := str(sim.party_room())
 	var info: Dictionary = sim.map.by_id.get(room, {})
 	var corridor: bool = bool(info.get("corridor", false))
 	if sim._hostiles_in_room(room) > 0 and not corridor:
+		if bool(sim.channeling_altar):
+			sim.submit("stop_channel", {})
+		# Drop the march. A path already in flight would otherwise walk through the fight.
+		sim.submit("move_tile", {"tile": Fixed.tile_of(sim.anchor)})
 		return
-	if room == "altar" and not sim.altar_done and sim._hostiles_in_room("altar") == 0:
-		var altar: Vector2i = sim.map.node_tile("altar:rear")
-		if Fixed.dist(sim.anchor, Fixed.tile_center(altar)) > 1100:
-			sim.submit("move_tile", {"tile": altar})
+	var stake := _stake_here(sim)
+	if stake != "" and not _stake_done(sim, stake):
+		var node: Vector2i = sim.map.node_tile("%s:rear" % stake)
+		if Fixed.dist(sim.anchor, Fixed.tile_center(node)) > 1100:
+			sim.submit("move_tile", {"tile": node})
 		else:
 			sim.submit("channel_altar", {})
 		return
@@ -113,18 +119,55 @@ func _goal(sim) -> String:
 	return str(plan[step])
 
 
-func _reached(sim, room: String) -> bool:
-	match room:
-		"fork":
-			return bool(sim.visited.get("fork", false))
-		"summoned":
-			return bool(sim.cleared.get("summoned", false)) or bool(sim.visited.get("cross", false))
-		"cross":
-			return bool(sim.visited.get("corr_ca", false)) or bool(sim.visited.get("altar", false)) or bool(sim.cleared.get("cross", false))
+func _stake_here(sim) -> String:
+	var room := str(sim.party_room())
+	var kind := str(sim.map.by_id.get(room, {}).get("kind", ""))
+	if kind in ["seal", "font", "altar"]:
+		return room
+	return ""
+
+
+func _stake_done(sim, id: String) -> bool:
+	match id:
+		"seal":
+			return bool(sim.seal_done)
+		"font":
+			return bool(sim.font_done)
 		"altar":
 			return bool(sim.altar_done)
 		_:
-			return false
+			return true
+
+
+func _reached(sim, room: String) -> bool:
+	var info: Dictionary = sim.map.by_id.get(room, {})
+	var kind := str(info.get("kind", ""))
+	if kind == "fork":
+		return bool(sim.visited.get(room, false))
+	if kind in ["trapped", "summoned", "cursed", "cross"]:
+		if bool(sim.cleared.get(room, false)):
+			return true
+		if str(sim.party_room()) == room and sim._hostiles_in_room(room) == 0:
+			return true
+		return _visited_later(sim, room)
+	if kind == "seal":
+		return bool(sim.seal_done)
+	if kind == "font":
+		return bool(sim.font_done)
+	if kind == "altar":
+		return bool(sim.altar_done)
+	return false
+
+
+func _visited_later(sim, room: String) -> bool:
+	var seen := false
+	for p in plan:
+		if str(p) == room:
+			seen = true
+			continue
+		if seen and bool(sim.visited.get(p, false)):
+			return true
+	return false
 
 
 func _focus_id(sim) -> int:

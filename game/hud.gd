@@ -78,11 +78,21 @@ func refresh(snap: Dictionary) -> void:
 	_clock.text = "%d:%02d" % [secs / 60, secs % 60]
 	var room := str(snap.party_room)
 	var lock := str(snap.route_lock)
-	_room.text = "%s   stance %s%s%s" % [
+	var stage_names := ["Descent", "Wards", "Sanctum", "Approach"]
+	var stage_i := clampi(int(snap.get("stage", 0)), 0, stage_names.size() - 1)
+	var marks := ""
+	if bool(snap.get("seal_done", false)):
+		marks += "  SEAL"
+	if int(snap.get("cleanse_charges", 0)) > 0:
+		marks += "  FONT"
+	if int(snap.revive_charges) > 0:
+		marks += "  REVIVE x%d" % int(snap.revive_charges)
+	_room.text = "%s   %s   stance %s%s%s" % [
+		stage_names[stage_i],
 		room,
 		snap.chosen_stance,
 		"" if lock == "" else "   committed: " + lock,
-		"   REVIVE x%d" % int(snap.revive_charges) if int(snap.revive_charges) > 0 else "",
+		marks,
 	]
 	if bool(snap.corruption):
 		_room.text += "   CORRUPTION"
@@ -149,7 +159,7 @@ func refresh(snap: Dictionary) -> void:
 				secs2 / 60, secs2 % 60, int(snap.stats.revives), str(snap.echo_style)
 			]
 		else:
-			_end_label.text = "The party is extinguished.\n\n%d:%02d   the dungeon keeps the altar." % [secs2 / 60, secs2 % 60]
+			_end_label.text = "The party is extinguished.\n\n%d:%02d   the siege holds." % [secs2 / 60, secs2 % 60]
 	else:
 		_end.visible = false
 
@@ -178,7 +188,7 @@ func _build_brief() -> void:
 	_brief.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_brief)
 	var l := Label.new()
-	l.text = "Celestial Q Siege  —  Combat Lab\n\nFive angels, one squad. Tap the ground or a doorway to move.\nAt the fork the branches differ: still air (traps), skittering (summons), whispers (curses).\n\nStance is a standing bet: Tight, Spread, or Column.\nScatter Roll and Phalanx Push are the reactions.\n\nShield, Heal, Cleanse, Detect, Burst route themselves.\nTap a portrait for that angel's three skills. Tap an enemy to focus.\n\nThe altar banks a revive — it sits in the demon's strongest room.\nThen Lucifer. The dungeon you shaped comes with him."
+	l.text = "Celestial Q Siege\n\nFive angels, one squad. Tap the ground or a doorway. A doorway commits you for 3 seconds.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column.\nScatter Roll and Phalanx Push are the reactions. Tap an enemy to focus.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
 	l.position = Vector2(180, 70)
 	l.size = Vector2(920, 460)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

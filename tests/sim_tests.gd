@@ -6,6 +6,9 @@ var failures: Array = []
 func run_all() -> int:
 	var tests := [
 		"test_map_connects",
+		"test_elixir_compounds_by_stage",
+		"test_tiers_follow_rooms_cleared",
+		"test_seal_blocks_swarms_and_font_eats_curse",
 		"test_fixed_math",
 		"test_determinism",
 		"test_elixir_cap_and_no_rubber_band",
@@ -24,6 +27,7 @@ func run_all() -> int:
 		"test_gabriel_aura",
 		"test_director_uses_nodes_only",
 		"test_competent_policy_can_win",
+		"test_march_takes_minutes",
 	]
 	for name in tests:
 		call(name)
@@ -44,8 +48,88 @@ func fail(msg: String) -> void:
 func test_map_connects() -> void:
 	var map := DungeonMap.new()
 	var errors: Array = map.validate()
+	var tiles := map.path_between("start", "throne").size()
+	print("  throne path ", tiles, " tiles")
 	if not errors.is_empty():
-		fail("map: %s\n%s" % [str(errors), map.ascii()])
+		fail("map: %s" % str(errors))
+
+
+func test_elixir_compounds_by_stage() -> void:
+	var prev := -1
+	var prev_step := 0
+	for s in 5:
+		var g := Balance.golden_regen(s)
+		if Balance.dark_regen(s) <= 0:
+			fail("dark regen missing at %d" % s)
+		if s == 0 and g > 4:
+			fail("opening golden regen %d is not slow" % g)
+		if s > 0:
+			var step := g - prev
+			if step <= prev_step:
+				fail("golden regen did not accelerate at stage %d (%d -> %d)" % [s, prev, g])
+			prev_step = step
+		prev = g
+	if Balance.golden_regen(3) < Balance.golden_regen(0) * 6:
+		fail("late crawl is not a multiple of the opening")
+	if Balance.golden_regen(4) <= Balance.golden_regen(3):
+		fail("lucifer is not the regen peak")
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var before := sim.golden
+	sim.tick_once()
+	var early := sim.golden - before
+	sim.stage_reached = 3
+	before = sim.golden
+	sim.tick_once()
+	var late := sim.golden - before
+	if late < early * 6:
+		fail("sim regen early %d late %d" % [early, late])
+
+
+func test_tiers_follow_rooms_cleared() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	sim.rooms_cleared = Balance.HEAVY_ROOMS - 1
+	if sim.legal_spawn("swarm", "summoned:center") != "":
+		fail("swarm should be open from the first room")
+	if sim.legal_spawn("heavy", "summoned:center") != "tier":
+		fail("heavy unlocked too early")
+	if sim.legal_spawn("elite", "altar:rear") != "tier":
+		fail("elite unlocked too early")
+	sim.rooms_cleared = Balance.HEAVY_ROOMS
+	if sim.legal_spawn("heavy", "gallery1:center") != "":
+		fail("heavy still locked at %d rooms" % Balance.HEAVY_ROOMS)
+	if sim.legal_spawn("elite", "altar:rear") != "tier":
+		fail("elite should wait until %d rooms" % Balance.ELITE_ROOMS)
+	sim.rooms_cleared = Balance.ELITE_ROOMS
+	if sim.legal_spawn("elite", "altar:rear") != "":
+		fail("elite still locked at the gate")
+
+
+func test_seal_blocks_swarms_and_font_eats_curse() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	sim.seal_done = true
+	if sim.legal_spawn("swarm", "summoned:center") != "sealed":
+		fail("seal did not lock swarms")
+	sim.submit("spawn", {"unit": "swarm", "node": "summoned:center"}, "demon", 1)
+	sim.tick_once()
+	if sim.mob_count() != 0:
+		fail("a sealed swarm still spawned")
+	sim.rooms_cleared = Balance.HEAVY_ROOMS
+	if sim.legal_spawn("heavy", "gallery1:center") != "":
+		fail("seal also locked heavies")
+	sim.cleanse_charges = 1
+	sim.dark = 9000
+	sim.submit("curse", {"kind": "silence", "target": "raphael"}, "demon", 1)
+	for _i in 90:
+		sim.tick_once()
+	if int(sim._hero("raphael").silence_until) > sim.tick:
+		fail("font charge did not burn the silence")
+	if sim.cleanse_charges != 0:
+		fail("font charge was not spent")
 
 
 func test_fixed_math() -> void:
@@ -361,14 +445,18 @@ func test_director_uses_nodes_only() -> void:
 func test_competent_policy_can_win() -> void:
 	var sim := CombatSim.new()
 	var policy := preload("res://tests/angel_policy.gd").new()
-	var limit := 12000
+	# 16 minutes of ticks. The crawl should finish well inside this.
+	var limit := 20 * 60 * 16
 	var announced := false
+	var lucifer_tick := -1
 	var dead_noted := {}
 	for _i in limit:
 		if sim.outcome != "":
 			break
 		policy.act(sim)
 		sim.tick_once()
+		if sim.phase == "lucifer" and lucifer_tick < 0:
+			lucifer_tick = sim.tick
 		for a in sim._angels():
 			if not a.alive and not dead_noted.has(a.subtype):
 				dead_noted[a.subtype] = true
@@ -377,11 +465,52 @@ func test_competent_policy_can_win() -> void:
 		if sim.phase == "lucifer" and not announced:
 			announced = true
 			print("  lucifer ", sim.debug_string(), " echo=", sim.echo_units, " style=", sim.echo_style)
-		if sim.tick % 1000 == 0:
+		if sim.tick % 2000 == 0:
 			print("  ", sim.debug_string())
+	var crawl_s := float(lucifer_tick) / 20.0
+	var total_s := float(sim.tick) / 20.0
+	var boss_s := total_s - crawl_s if lucifer_tick >= 0 else -1.0
+	print("  pacing crawl=%0.1fs boss=%0.1fs total=%0.1fs outcome=%s" % [crawl_s, boss_s, total_s, sim.outcome])
 	if sim.outcome != "angels":
 		fail("policy did not win: %s" % sim.debug_string())
 		print(_feed(sim))
+		return
+	# Fought crawl is the siege. A skipped-fight stroll lands near 7 minutes;
+	# holding rooms pushes it past 8. The boss is the climax, not the clock.
+	if lucifer_tick < 20 * 60 * 8:
+		fail("throne in %0.1fs — the crawl is still too short" % crawl_s)
+	if total_s > 14.0 * 60.0:
+		fail("full run %0.1fs is past the 8–12 minute band" % total_s)
+	if boss_s >= crawl_s:
+		fail("boss %0.1fs lasted as long as the crawl %0.1fs" % [boss_s, crawl_s])
+	if boss_s < 60.0:
+		fail("boss ended in %0.1fs — not a climax" % boss_s)
+	if not bool(sim.visited.get("throne", false)):
+		fail("won without reaching the throne")
+
+
+func test_march_takes_minutes() -> void:
+	# No demon. This is the geometry: walking and claiming the three stakes.
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var policy := preload("res://tests/angel_policy.gd").new()
+	var limit := 20 * 60 * 12
+	var throne_tick := -1
+	for _i in limit:
+		if bool(sim.visited.get("throne", false)):
+			throne_tick = sim.tick
+			break
+		policy.act(sim)
+		sim.tick_once()
+	print("  empty march ", throne_tick, " ticks (", float(throne_tick) / 20.0, "s) ", sim.debug_string())
+	if throne_tick < 0:
+		fail("empty march never reached the throne")
+		return
+	var march_s := float(throne_tick) / 20.0
+	if march_s < 6.0 * 60.0 or march_s > 9.0 * 60.0:
+		fail("empty march reached the throne in %0.1fs (want 6–9 min of road)" % march_s)
+	if not sim.seal_done or not sim.font_done or not sim.altar_done:
+		fail("march skipped a stake seal=%s font=%s altar=%s" % [sim.seal_done, sim.font_done, sim.altar_done])
 
 
 func _fresh_trap(kind: String, node: String) -> CombatSim:

@@ -4,7 +4,7 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: Prototype 0 (Combat Lab).** One branching dungeon, the angel command loop, twin elixir, an AI director, one push objective, and the Lucifer echo. Placeholder shapes, not final art. No networking yet: the sim already takes commands from either side, so a human demon can be a transport layer later.
+> **Status: M1 (the siege has a length).** Three stages, three forks whose branches differ, a stake in each stage, and elixir that compounds from a poor opening to a Lucifer peak. A scripted competent party reaches the throne in about 8.6 minutes and wins the fight in about 2, for a ~10.6 minute run. Placeholder shapes, not final art. No networking yet: the sim already takes commands from either side, so a human demon can be a transport layer later.
 
 ---
 
@@ -28,7 +28,29 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 
 Fog shows the current room and the next doorway. Traps stay hidden until Azrael's detect aura, a Detect pulse, or the lead angel steps on the tile. Curses show a cast bar before they land. Summons are visible when they spawn.
 
-Fork branches: **Still air** (traps), **Skittering** (a committed summon), **Whispers** (a committed curse). They reconverge. The altar banks one revive, spent automatically on the next death. Entering the throne makes the director descend. Lucifer's pattern and the one echo wave follow what the demon spent during the crawl. New curses stop. The trap cap drops. Killing Lucifer wins; a full wipe loses.
+The dungeon is three stages. Each fork reads the same way: **Still air** (traps), **Skittering** (a committed summon), **Whispers** (a committed curse). The east road is the short one; the other two are longer and reconverge. Between stages a held nave breaks the march.
+
+Each stage has a stake, claimed by standing on the rear node for 10 seconds with the room clear:
+
+| Stage | Stake | What it banks |
+| --- | --- | --- |
+| Descent | Gate Seal | Swarms can no longer be summoned |
+| Wards | Cleansing Font | The next curse burns away on landing |
+| Sanctum | Reviving Altar | One revive, spent automatically on the next death |
+
+Idling in a cleared room, a fork, or a stake you are not channeling feeds the demon. Entering the throne makes the director descend. Lucifer's pattern and the one echo wave follow what the demon spent during the crawl. New curses stop. The trap cap drops. Killing Lucifer wins; a full wipe loses.
+
+Elixir is milli-units per tick (20 ticks a second), and the step up gets larger each stage:
+
+| Stage | Golden / sec | Dark / sec |
+| --- | --- | --- |
+| Descent | 0.06 | 0.10 |
+| Wards | 0.12 | 0.18 |
+| Sanctum | 0.24 | 0.32 |
+| Approach | 0.48 | 0.60 |
+| Lucifer | 0.96 | 1.08 |
+
+Heavies unlock after 2 rooms cleared. The elite unlocks after 4. A fast party that clears rooms is what opens the tier, not the clock.
 
 ### Headless checks
 
@@ -37,7 +59,7 @@ godot --headless --path . --import
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite covers determinism, fog, elixir (cap, no rubber-band), stance vs traps, curse telegraph, cleanse order, route lock, anti-turtle, echo budgeting, altar revive, and a scripted angel policy that can win.
+`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite covers determinism, fog, elixir (cap, no rubber-band, compounding by stage), tier gates, the seal and the font, stance vs traps, curse telegraph, cleanse order, route lock, anti-turtle, echo budgeting, altar revive, the length of the road, and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at about 8.6 minutes and wins at about 10.6. The empty road, stakes included and no demon, is about 7.1 minutes and 1280 tiles.
 
 ---
 
@@ -48,7 +70,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 | `sim/` | Authoritative tick sim. Integer positions (milli-tiles) and elixir (milli). Commands only. |
 | `sim/combat_sim.gd` | Map, units, abilities, traps, curses, Lucifer, snapshots. |
 | `sim/director.gd` | Demon AI. Same `submit()` path a human demon will use. |
-| `sim/dungeon_map.gd` | The one dungeon: start, fork, three branches, altar, throne. |
+| `sim/dungeon_map.gd` | Three stages. Each is a fork, three different branches, a reconvergence, and a stake, plus a held nave on the march. |
 | `game/` | Rendering and touch input. Reads snapshots; never decides combat. |
 | `tests/` | Headless suite and the competent-angel policy. |
 | `project.godot` | Godot 4.7, Mobile renderer, landscape 1280×720. |
@@ -59,7 +81,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `0.1.0` (versionCode `2`)
+- App name: `Celestial Q Siege`, version `0.2.0` (versionCode `3`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
@@ -92,7 +114,9 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Portrait inspect is view state. It does not change the sim.
 - Detect is a paid wide pulse, and the same button disarms a revealed trap in range.
 - The Dark bar is visible here so the solo lab is readable. A real 1v1 would hide it.
-- Pacing is compressed versus the 8–12 minute target. The throne is about a minute away for a direct policy.
+- Pacing target is 8–12 minutes. The scripted party hits about 10.6: ~8.6 minutes of crawl, ~2 minutes of Lucifer. The marches are the long part; room fights add the rest.
+- The director still fills the Dark bank on the long marches, so the echo wave is often the capped one. Spending it down is future tuning.
+- The Gate Seal locks swarm summons. The Cleansing Font stores one auto-cleanse. The altar is still the revive.
 - Uriel's beam tracks the focus target. Finger-steering is deferred.
 - The altar charge auto-spends on the next death (short delay, half health). It does not rewind a death.
 - Column eats spikes on the lead angel and suffers longer snares.
