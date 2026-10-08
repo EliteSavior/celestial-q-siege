@@ -153,7 +153,16 @@ func _move(sim) -> void:
 	if sim._hostiles_in_room(room) > 0 and not corridor:
 		if bool(sim.channeling_altar):
 			sim.submit("stop_channel", {})
-		# Drop the march. A path already in flight would otherwise walk through the fight.
+		# A garrison across a large room is past leash from the door, so it
+		# does not pull until the squad walks in. Hold only once the fight
+		# is actually joined. Otherwise close to the center.
+		if _fight_joined(sim):
+			sim.submit("move_tile", {"tile": Fixed.tile_of(sim.anchor)})
+			return
+		var center: Vector2i = sim.map.node_tile("%s:center" % room)
+		if center != Vector2i.ZERO and Fixed.tile_of(sim.anchor) != center:
+			sim.submit("move_tile", {"tile": center})
+			return
 		sim.submit("move_tile", {"tile": Fixed.tile_of(sim.anchor)})
 		return
 	var stake := _stake_here(sim)
@@ -167,6 +176,24 @@ func _move(sim) -> void:
 	var goal := _goal(sim)
 	if goal != "" and goal != room:
 		sim.submit("move_room", {"room": goal})
+
+
+func _fight_joined(sim) -> bool:
+	var room := str(sim.party_room())
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.get("kind", "")) != "mob" or not bool(e.get("alive", false)):
+			continue
+		var here: bool = str(sim.map.id_at_tile(Fixed.tile_of(e.pos))) == room
+		var spawning: bool = str(e.get("home", "")) == room and int(e.get("active_at", 0)) > int(sim.tick)
+		if not here and not spawning:
+			continue
+		if bool(e.get("pulled", false)):
+			return true
+		for angel in sim._angels():
+			if bool(angel.alive) and Fixed.dist(angel.pos, e.pos) <= Balance.LEASH_RANGE:
+				return true
+	return false
 
 
 func _goal(sim) -> String:

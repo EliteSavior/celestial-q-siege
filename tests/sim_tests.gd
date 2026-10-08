@@ -118,6 +118,10 @@ func run_all() -> int:
 		"test_threat_meter_names_the_holder",
 		"test_diagonal_path_cuts_the_corner",
 		"test_elixir_abilities_have_no_cooldown",
+		"test_team_heal_button_is_its_own_control",
+		"test_doorway_fight_does_not_end_in_one_tick",
+		"test_entrance_stays_calm_until_the_first_room",
+		"test_golden_regen_is_slower_than_the_infinite_heal_tune",
 	]
 	ran = tests.size()
 	for name in tests:
@@ -249,9 +253,9 @@ func test_golden_regen_over_ticks() -> void:
 	if gain != want:
 		fail("stage 0 regen %d over %d ticks, want %d" % [gain, n, want])
 		return
-	# 4 points/sec at 20 Hz, held exactly.
-	if gain != 4 * Balance.POINT * n / Balance.TICK_HZ:
-		fail("stage 0 is not 4 points/sec (%d)" % gain)
+	# 2 points/sec at 20 Hz, held exactly. 1.1.0 was 4 and heals felt free.
+	if gain != 2 * Balance.POINT * n / Balance.TICK_HZ:
+		fail("stage 0 is not 2 points/sec (%d)" % gain)
 		return
 	sim.stage_reached = 3
 	before = sim.golden
@@ -4349,3 +4353,316 @@ func test_elixir_abilities_have_no_cooldown() -> void:
 		fail("taunt cooled down")
 	if sim.ability_casts < 2:
 		fail("second taunt did not cast (%s)" % _feed(sim))
+
+
+func test_team_heal_button_is_its_own_control() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.hud._layout_bottom()
+	if not game.hud._acts.has("team") or not game.hud._acts.has("mend"):
+		fail("team heal is not its own button next to single heal")
+		game.queue_free()
+		return
+	var team: Button = game.hud._acts.team
+	var mend: Button = game.hud._acts.mend
+	var team_r: Rect2 = team.get_rect()
+	var mend_r: Rect2 = mend.get_rect()
+	if team_r.size.x < 64.0 or team_r.size.y < 64.0:
+		fail("team heal target %s" % team_r.size)
+		game.queue_free()
+		return
+	if absf(team_r.position.y - mend_r.position.y) > 1.0:
+		fail("team heal is not on the single-heal row %s vs %s" % [team_r, mend_r])
+		game.queue_free()
+		return
+	var gap := team_r.position.x - mend_r.end.x
+	if gap < -1.0 or gap > 24.0:
+		fail("team heal is not beside single heal, gap %s" % gap)
+		game.queue_free()
+		return
+	var zoom_out: Button = game.hud._zoom_out
+	var zoom_in: Button = game.hud._zoom_in
+	var zout: Rect2 = zoom_out.get_rect()
+	var zin: Rect2 = zoom_in.get_rect()
+	if zout.size.y < 64.0 or zin.size.y < 64.0 or zout.end.y > 720.0 or zin.end.x > 196.0:
+		fail("zoom controls are not a visible pair under the portrait column %s %s" % [zout, zin])
+		game.queue_free()
+		return
+	if str(game.hud._zoom_l.text) != "ZOOM":
+		fail("zoom has no label")
+		game.queue_free()
+		return
+	var last_portrait_end := 0.0
+	for subtype in game.hud._portraits.keys():
+		var pr: Rect2 = game.hud._portraits[subtype].get_rect()
+		if pr.intersects(zout) or pr.intersects(zin):
+			fail("portrait covers zoom %s" % pr)
+			game.queue_free()
+			return
+		last_portrait_end = maxf(last_portrait_end, pr.end.y)
+	if zout.position.y < last_portrait_end:
+		fail("zoom sits under the portraits at %s, portraits end %s" % [zout, last_portrait_end])
+		game.queue_free()
+		return
+	var before_zoom: float = game.board.user_zoom
+	zoom_in.pressed.emit()
+	if game.board.user_zoom <= before_zoom:
+		fail("zoom + did not change the camera scale")
+		game.queue_free()
+		return
+	zoom_out.pressed.emit()
+	game.board.apply_pinch_factor(1.25)
+	if game.board.user_zoom <= before_zoom:
+		fail("pinch did not zoom in")
+		game.queue_free()
+		return
+	var queued := game.sim.queue.size()
+	mend.pressed.emit()
+	if game.sim.queue.size() != queued:
+		fail("single heal cast instead of arming")
+		game.queue_free()
+		return
+	if game.armed != "single_heal":
+		fail("single heal did not arm")
+		game.queue_free()
+		return
+	for angel in game.sim._angels():
+		angel.hp = int(angel.hp_max) - 40
+	var before := {}
+	for angel2 in game.sim._angels():
+		before[int(angel2.id)] = int(angel2.hp)
+	game.sim.golden = 9000
+	team.pressed.emit()
+	if game.armed != "":
+		fail("team heal armed a target instead of casting")
+		game.queue_free()
+		return
+	if game.sim.queue.size() != queued + 1:
+		fail("team heal did not submit")
+		game.queue_free()
+		return
+	game.sim.tick_once()
+	for angel3 in game.sim._angels():
+		var gained: int = int(angel3.hp) - int(before[int(angel3.id)])
+		if gained != Balance.HEAL_PARTY:
+			fail("team heal moved %s by %d" % [angel3.subtype, gained])
+			game.queue_free()
+			return
+	game.queue_free()
+
+
+func test_doorway_fight_does_not_end_in_one_tick() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var center: Vector2i = sim.map.node_tile("summoned:center")
+	var imp_pos := Fixed.tile_center(center)
+	sim._make_mob("imp", "Imp", imp_pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], "summoned:center")
+	var imp: Dictionary = sim.entities[sim.next_id - 1]
+	imp.active_at = 0
+	var door := _west_door(sim, "summoned")
+	if door.is_empty():
+		fail("summoned has no west door")
+		return
+	var threshold: Vector2i = door.door
+	var outside: Vector2i = door.out
+	var dist := Fixed.dist(Fixed.tile_center(threshold), imp.pos)
+	if sim.map.id_at_tile(threshold) != "summoned" or sim.map.id_at_tile(outside) == "summoned":
+		fail("threshold %s / %s is not the room edge" % [threshold, outside])
+		return
+	if dist <= Balance.LEASH_RANGE:
+		fail("doorway dist %d is inside leash; the phantom fight is a far threshold" % dist)
+		return
+	_place_party(sim, threshold)
+	sim.tick_once()
+	if bool(imp.pulled):
+		fail("stepping onto the doorway pulled a garrison %d past leash" % dist)
+		return
+	_place_party(sim, outside)
+	sim.tick_once()
+	if bool(imp.pulled):
+		fail("stepping back out of the doorway started a fight")
+		return
+	_place_party(sim, center)
+	sim.tick_once()
+	if not bool(imp.pulled):
+		fail("closing inside the room did not start the fight")
+		return
+	var hp := int(imp.hp)
+	for _i in 40:
+		sim.path = []
+		sim.tick_once()
+		if not bool(imp.pulled):
+			fail("in-range fight dropped on tick %d" % sim.tick)
+			return
+	if int(imp.hp) >= hp:
+		fail("the held fight dealt no damage")
+
+
+func test_entrance_stays_calm_until_the_first_room() -> void:
+	var sim := CombatSim.new()
+	if str(sim.map.by_id["start"].kind) != "start":
+		fail("antechamber is not a start room")
+		return
+	var hp := {}
+	for angel in sim._angels():
+		hp[int(angel.id)] = int(angel.hp)
+	for _i in 80:
+		sim.tick_once()
+	if sim.party_room() != "start":
+		fail("the opening walked out of the antechamber into %s" % sim.party_room())
+		return
+	if _pulled_count(sim) != 0 or _mob_homed(sim, "start") != 0:
+		fail("the antechamber started a fight pulls=%d home=%d" % [_pulled_count(sim), _mob_homed(sim, "start")])
+		return
+	for angel2 in sim._angels():
+		if int(angel2.hp) < int(hp[int(angel2.id)]):
+			fail("the antechamber dealt damage")
+			return
+	var fork: Vector2i = sim.map.center_tile("fork")
+	if not _walk_to(sim, fork, 20 * 30):
+		fail("could not reach the fork from the antechamber")
+		return
+	for _j in 40:
+		sim.tick_once()
+	if _pulled_count(sim) != 0:
+		fail("the fork pulled a fight before a real room")
+		return
+	var goal: Vector2i = sim.map.node_tile("summoned:center")
+	sim.submit("move_tile", {"tile": goal})
+	var fought := ""
+	for _k in 20 * 120:
+		sim.tick_once()
+		if _pulled_count(sim) > 0:
+			fought = sim.party_room()
+			break
+	if fought == "":
+		fail("walking into the first room never started a fight %s" % sim.debug_string())
+		return
+	var kind := str(sim.map.by_id.get(fought, {}).get("kind", ""))
+	if kind not in ["summoned", "trapped", "cursed"]:
+		fail("first fight started in %s (%s), not a real room" % [fought, kind])
+		return
+	sim.path = []
+	var held := _first_pulled(sim)
+	if held.is_empty():
+		fail("pull vanished as the hold started")
+		return
+	for _n in 40:
+		sim.path = []
+		sim.tick_once()
+		if not bool(held.alive) or not bool(held.pulled):
+			fail("first fight ended during the hold room=%s" % sim.party_room())
+			return
+
+
+func test_golden_regen_is_slower_than_the_infinite_heal_tune() -> void:
+	var curve := [10, 22, 48, 110, 260]
+	var rates := [2.0, 4.4, 9.6, 22.0, 52.0]
+	for i in 5:
+		var g := Balance.golden_regen(i)
+		if g != curve[i]:
+			fail("golden curve %d is %d, want %d" % [i, g, curve[i]])
+			return
+		var pts := float(g) * float(Balance.TICK_HZ) / float(Balance.POINT)
+		if absf(pts - rates[i]) > 0.05:
+			fail("stage %d regens %0.2f points/sec" % [i, pts])
+			return
+	var g0 := Balance.golden_regen(0)
+	if g0 <= 3:
+		fail("descent %d fell back to the 1.0.3 starvation floor" % g0)
+		return
+	if g0 >= 20:
+		fail("descent %d is still the 1.1.0 infinite-heal tune" % g0)
+		return
+	var rate := float(g0) * float(Balance.TICK_HZ) / float(Balance.POINT)
+	var mend := float(Balance.points_of(Balance.cost("single_heal")))
+	var party := float(Balance.points_of(Balance.cost("party_heal")))
+	if mend / rate <= 2.0:
+		fail("a mend refunds in %0.2fs" % (mend / rate))
+		return
+	if rate * 5.0 >= party:
+		fail("5s of descent regen pays a party heal")
+
+
+func _west_door(sim: CombatSim, room_id: String) -> Dictionary:
+	var room: Dictionary = sim.map.by_id.get(room_id, {})
+	if room.is_empty():
+		return {}
+	var best_x := 9999
+	var door := Vector2i.ZERO
+	var outside := Vector2i.ZERO
+	var dirs: Array[Vector2i] = [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]
+	for ex in room.exits:
+		var tile: Vector2i = ex.tile
+		if tile.x > best_x:
+			continue
+		for d in dirs:
+			var n: Vector2i = tile + d
+			var id := sim.map.id_at_tile(n)
+			if id != "" and id != room_id:
+				best_x = tile.x
+				door = tile
+				outside = n
+				break
+	if best_x == 9999:
+		return {}
+	return {"door": door, "out": outside}
+
+
+func _place_party(sim: CombatSim, tile: Vector2i) -> void:
+	sim.path = []
+	sim.anchor = Fixed.tile_center(tile)
+	for angel in sim._angels():
+		angel.pos = sim.anchor
+	sim.party_room_id = sim.map.id_at_tile(tile)
+
+
+func _walk_to(sim: CombatSim, tile: Vector2i, limit: int) -> bool:
+	sim.submit("move_tile", {"tile": tile})
+	for _i in limit:
+		sim.tick_once()
+		if sim.outcome != "":
+			return false
+		if sim.path.is_empty() and Fixed.tile_of(sim.anchor) == tile:
+			return true
+	return Fixed.tile_of(sim.anchor) == tile
+
+
+func _pulled_count(sim: CombatSim) -> int:
+	var n := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "mob" and bool(e.alive) and bool(e.get("pulled", false)):
+			n += 1
+	return n
+
+
+func _mob_homed(sim: CombatSim, room_id: String) -> int:
+	var n := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "mob" and str(e.get("home", "")) == room_id:
+			n += 1
+	return n
+
+
+func _first_pulled(sim: CombatSim) -> Dictionary:
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "mob" and bool(e.alive) and bool(e.get("pulled", false)):
+			return e
+	return {}

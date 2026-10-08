@@ -12,20 +12,21 @@ config_version=5
 
 config/name="Celestial Q Siege"
 config/description="Touch-friendly 1v1 asymmetric angels-vs-demons strategy RPG for Android."
-config/version="1.1.0"
+config/version="1.1.1"
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
 
 [display]
 
-; Base layout is 1280x720 and expands. Phones open in portrait; a 1080x2400
-; window becomes a tall canvas so the iso room stays fully on screen.
+; Base layout is 1280x720 landscape and expands. Godot 4.7 writes this
+; project orientation into the Android manifest (there is no preset key).
+; 0 is Landscape.
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/handheld/orientation=5
+window/handheld/orientation=0
 
 [input_devices]
 

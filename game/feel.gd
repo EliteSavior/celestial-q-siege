@@ -47,10 +47,11 @@ func follow(snap: Dictionary) -> void:
 		if _seen.has(key):
 			continue
 		_seen[key] = true
-		var bad := str(pop.kind) == "bad"
-		_burst(pop.pos, Color(1.0, 0.4, 0.3) if bad else Color(0.5, 1.0, 0.62))
+		var kind := str(pop.kind)
+		var hit := kind == "bad" or kind == "dmg"
+		_burst(pop.pos, Color(1.0, 0.4, 0.3) if hit else Color(0.5, 1.0, 0.62))
 		if sfx:
-			sfx.play("hit" if bad else "heal")
+			sfx.play("hit" if hit else "heal")
 	var heroes: Dictionary = snap.get("heroes", {})
 	for subtype in heroes.keys():
 		var casting := str(heroes[subtype].get("casting", ""))

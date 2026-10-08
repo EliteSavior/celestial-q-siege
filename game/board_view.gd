@@ -84,6 +84,10 @@ var zoom := 1.0
 ## view; 1.22 starts slightly closer so the squad reads at a glance.
 var user_zoom := 1.22
 var cam_ready := false
+var _touches := {}
+var _pinch_dist := 0.0
+var _prev_hp := {}
+var _flash_until := {}
 
 
 var guide_drawn := false
@@ -97,8 +101,41 @@ func _ready() -> void:
 	RenderingServer.canvas_item_set_clip(get_canvas_item(), true)
 
 
+func apply_pinch_factor(factor: float) -> void:
+	if factor <= 0.01:
+		return
+	user_zoom = clampf(user_zoom * factor, 0.75, 1.9)
+
+
+func _touch_span() -> float:
+	var pts: Array = _touches.values()
+	if pts.size() < 2:
+		return 0.0
+	return (pts[0] as Vector2).distance_to(pts[1] as Vector2)
+
+
 func _gui_input(event: InputEvent) -> void:
 	if game == null:
+		return
+	if event is InputEventMagnifyGesture:
+		apply_pinch_factor(event.factor)
+		accept_event()
+		return
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_touches[event.index] = event.position
+		else:
+			_touches.erase(event.index)
+			if _touches.size() < 2:
+				_pinch_dist = 0.0
+			return
+	if event is InputEventScreenDrag and _touches.size() >= 2:
+		_touches[event.index] = event.position
+		var span: float = _touch_span()
+		if _pinch_dist > 8.0 and span > 8.0:
+			apply_pinch_factor(span / _pinch_dist)
+		_pinch_dist = span
+		accept_event()
 		return
 	if event is InputEventScreenDrag:
 		game.note_drag(event.position)
@@ -429,9 +466,27 @@ func _draw_guide(font) -> void:
 	guide_drawn = true
 
 
+func _note_hit_flashes() -> void:
+	var now := Time.get_ticks_msec()
+	var units: Array = []
+	for hero in snap.get("angels", []):
+		units.append(hero)
+	for foe in snap.get("foes", []):
+		units.append(foe)
+	for u in units:
+		if typeof(u) != TYPE_DICTIONARY:
+			continue
+		var id := int(u.get("id", 0))
+		var hp := int(u.get("hp", 0))
+		if _prev_hp.has(id) and hp < int(_prev_hp[id]):
+			_flash_until[id] = now + 160
+		_prev_hp[id] = hp
+
+
 func _process(_delta: float) -> void:
 	if snap.is_empty() or game == null:
 		return
+	_note_hit_flashes()
 	var rect := _focus_rect()
 	var bounds := _iso_bounds(rect)
 	var view := _view_size()
@@ -565,8 +620,17 @@ func _draw() -> void:
 	for pop in snap.popups:
 		if font:
 			var age := int(snap.tick) - int(pop.tick)
-			var colp := Color(1, 0.45, 0.4) if str(pop.kind) == "bad" else Color(0.6, 1, 0.65)
-			draw_string(font, _milli_screen(pop.pos) + Vector2(-8, -18 - age), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, colp)
+			var kind := str(pop.kind)
+			var colp := Color(1.0, 0.95, 0.82)
+			if kind == "bad":
+				colp = Color(1.0, 0.36, 0.3)
+			elif kind == "good":
+				colp = Color(0.4, 1.0, 0.52)
+			elif kind == "dmg":
+				colp = Color(1.0, 0.92, 0.45)
+			var at := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.4)
+			draw_string(font, at + Vector2(1, 1), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0, 0, 0, 0.85))
+			draw_string(font, at, str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, colp)
 	_draw_guide(font)
 	if str(snap.banner) != "" and font:
 		var bp := view_pos + Vector2(12, 36)
@@ -765,6 +829,10 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 	var radius := 16.0 if str(u.subtype) == "lucifer" else (11.0 if foe else 10.0)
 	if str(u.subtype) == "heavy" or str(u.subtype) == "elite":
 		radius = 14.0
+	var flashing := _flash_until.has(int(u.get("id", 0))) and Time.get_ticks_msec() < int(_flash_until[int(u.get("id", 0))])
+	if flashing:
+		col = col.lightened(0.7)
+		draw_arc(p, radius + 7.0, 0, TAU, 16, Color(1.0, 0.96, 0.75, 0.9), 3.0)
 	if bool(u.get("spawning", false)):
 		col.a = 0.55
 		draw_arc(p, radius + 10, 0, TAU, 18, TELL_COLOR.echo, 3.0)
@@ -781,12 +849,18 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 		draw_arc(p, radius + 11, 0, PI, 8, Color(0.45, 0.7, 0.3), 2.0)
 	var hp := float(maxi(int(u.hp), 0))
 	var mx := float(maxi(int(u.hp_max), 1))
-	var w := 36.0
-	draw_rect(Rect2(p + Vector2(-w * 0.5 - 1, -radius - 12), Vector2(w + 2, 7)), Color(0, 0, 0, 0.75))
+	var w := 56.0 if foe else 40.0
+	var bar_h := 10.0 if foe else 6.0
+	var bar_y := -radius - 16.0 if foe else -radius - 12.0
+	draw_rect(Rect2(p + Vector2(-w * 0.5 - 1, bar_y - 1), Vector2(w + 2, bar_h + 2)), Color(0, 0, 0, 0.85))
 	var hp_col := Color(0.4, 0.88, 0.45) if not foe else Color(0.95, 0.28, 0.22)
-	if not foe and hp / mx < 0.35:
-		hp_col = Color(0.95, 0.32, 0.22)
-	draw_rect(Rect2(p + Vector2(-w * 0.5, -radius - 11), Vector2(w * hp / mx, 5)), hp_col)
+	if hp / mx < 0.35:
+		hp_col = Color(0.95, 0.78, 0.18)
+	if hp / mx < 0.15:
+		hp_col = Color(0.95, 0.28, 0.22)
+	draw_rect(Rect2(p + Vector2(-w * 0.5, bar_y), Vector2(w * hp / mx, bar_h)), hp_col)
+	if foe and font:
+		draw_string(font, p + Vector2(-w * 0.5, bar_y - 2), "%d/%d" % [int(hp), int(mx)], HORIZONTAL_ALIGNMENT_LEFT, w, 13, Color(1, 0.96, 0.9))
 	if font and (str(u.subtype) == "lucifer" or str(u.subtype) == "elite" or not foe):
 		var tag := str(u.name)[0] if not foe else str(u.subtype)
 		if str(u.subtype) == "lucifer":

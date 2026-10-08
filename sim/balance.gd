@@ -18,13 +18,18 @@ const DARK_START := 10000
 # until this window ends. Golden still regens. The director still spends.
 const OPENING_GRACE_TICKS := 40
 
-# Internal elixir per tick (100 internal = 1 point). Index is the stage
-# reached (0 descent … 3 approach). Index 4 is the Lucifer phase.
-# Golden was [3, 6, 12, 24, 48] in 1.0.3 (0.06–0.96 of the old 0–10 meter
-# per second). Descent is now 4 points/sec so a Heavy or Elite fight can
-# fund several casts; each later stage still accelerates.
+# Internal elixir per tick (100 internal = 1 point, 20 ticks/sec, so
+# points/sec = internal / 5). Index is the stage reached (0 descent …
+# 3 approach). Index 4 is the Lucifer phase.
+# 1.0.3 was [3, 6, 12, 24, 48] internal/tick (0.6 points/sec at descent)
+# and a fight starved. 1.1.0 was [20, 40, 80, 160, 320] (4 points/sec at
+# descent) and a Mend refunded itself before the cast mattered.
+# 1.1.1 is [10, 22, 48, 110, 260] = 2.0, 4.4, 9.6, 22.0, 52.0 points/sec.
+# Descent refunds a Mend (6) in 3s and a Party Heal (15) in 7.5s, so a
+# cast is a choice. Later stages still accelerate, and Lucifer stays near
+# the old 64/s so the boss window does not collapse.
 # Dark regen is unchanged from 1.0.3, so the director buys the same siege.
-const GOLDEN_CURVE: Array[int] = [20, 40, 80, 160, 320]
+const GOLDEN_CURVE: Array[int] = [10, 22, 48, 110, 260]
 const DARK_CURVE: Array[int] = [5, 9, 16, 30, 54]
 
 # Summon tiers unlock by rooms cleared, not by the clock.
