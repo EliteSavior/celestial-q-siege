@@ -29,6 +29,9 @@ func setup(s) -> void:
 
 
 func on_tick() -> void:
+	if sim.phase == "lucifer":
+		_press_boss()
+		return
 	if sim.phase != "dungeon" or descended:
 		return
 	if sim.tick < next_decision:
@@ -95,12 +98,31 @@ func _maybe_descend() -> bool:
 	if room == "throne":
 		_do_descend(false)
 		return true
-	# A late gamble only. Descending in the first two stages would skip the siege.
-	if sim.stage_reached >= 2 and sim.party_hp_pct() < 32 and sim.dark >= 3000 and sim.rooms_cleared >= Balance.ELITE_ROOMS:
-		if room in ["altar", "gallery3", "cross3", "fork3", "summoned3"]:
-			_do_descend(true)
-			return true
+	# Early-descent gamble. The sanctum is open and the altar revive is not
+	# banked, but the party is already hurt. Arrive now, spend less Dark,
+	# and accept a weaker Lucifer plus a thinner echo.
+	if _early_room(room) and sim.stage_reached >= 2 and not sim.altar_done and sim.party_hp_pct() <= 48 and sim.dark >= 2500 and sim.rooms_cleared >= Balance.ELITE_ROOMS:
+		_do_descend(true)
+		return true
+	# The same lever, taken in panic: a party about to break is not worth
+	# the rest of the crawl, even if the altar is already claimed.
+	if _early_room(room) and sim.stage_reached >= 2 and sim.party_hp_pct() < 32 and sim.dark >= 3000 and sim.rooms_cleared >= Balance.ELITE_ROOMS:
+		_do_descend(true)
+		return true
 	return false
+
+
+func _early_room(room: String) -> bool:
+	return room in ["altar", "gallery3", "cross3", "fork3", "summoned3"]
+
+
+func _press_boss() -> void:
+	if sim.lucifer_pattern.is_empty() or sim.outcome != "":
+		return
+	var button := str(sim.lucifer_pattern[sim.lucifer_step % sim.lucifer_pattern.size()])
+	if sim.legal_boss(button) != "":
+		return
+	sim.submit("boss", {"button": button}, "demon", 1)
 
 
 func _do_descend(early: bool) -> void:

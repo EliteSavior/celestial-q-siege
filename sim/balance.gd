@@ -52,6 +52,11 @@ const SPAWN_TELEGRAPH := 20
 const ECHO_DELAY := 100
 const CURSE_CAST_MARK := 60
 const CURSE_CAST := 50
+# Lucifer's arrival and each of his four buttons are a 3s tell.
+# The gap is basic attacks only, so a tell is never stacked on a tell.
+const TRANSFORM_CAST := 60
+const BOSS_TELL := 60
+const BOSS_GAP := 40
 
 const DETECT_AURA := 2200
 const DETECT_PULSE := 5600
@@ -63,6 +68,10 @@ const TIGHT_SPIKE := 950
 const TRAP_CAP := 4
 const TRAP_CAP_PER_ROOM := 2
 const ECHO_TRAP_CAP := 2
+# A trap-heavy echo keeps one extra planted trap. Still under the dungeon cap.
+const ECHO_TRAP_CAP_TRAPPY := 3
+# Counts below this are noise. The echo starts reflecting the siege above it.
+const HISTORY_FLOOR := 4
 # A committed elite or trap cluster is readable for 3 seconds before it arms.
 const COMMIT_CAST := 60
 # March ceilings by stage. Overflow above the line is spent, so a long
@@ -106,7 +115,7 @@ const DISENGAGE_TICKS := 30
 const WEAKEN_DEALT := 80
 const PHALANX_TICKS := 60
 const PHALANX_ABSORB := 28
-const SCATTER_TICKS := 50
+const SCATTER_TICKS := 70
 const SCATTER_IFRAME := 12
 const SCATTER_SHOVE := 1400
 const SILENCE_TICKS := 80
@@ -132,8 +141,8 @@ const ALTAR_REVIVE_DELAY := 20
 const DOWNED_TICKS := 60
 
 # The crawl is the siege. Lucifer is the climax, not most of the clock:
-# a healthy party burns this down in a couple of minutes of telegraphs.
-const LUCIFER_HP := 3200
+# a healthy party burns this down in about two minutes of telegraphs.
+const LUCIFER_HP := 3700
 const LUCIFER_HP_EARLY := 2100
 const JUDGMENT_DMG := 48
 const CLEAVE_DMG := 34

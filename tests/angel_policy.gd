@@ -46,16 +46,20 @@ func _defense(sim) -> void:
 	if not tg.is_empty():
 		var name := str(tg.get("name", ""))
 		var remain: int = int(tg.get("until", 0)) - int(sim.tick)
-		if name == "hell_rain" and remain <= 22:
+		if name == "hell_rain" and remain <= 40:
 			sim.submit("scatter", {})
-		elif name == "cleave" and remain <= 28:
+		elif name == "cleave" and remain <= 40:
 			sim.submit("scatter", {})
-		elif name == "grasp" and remain <= 22:
+			sim.submit("ability", {"name": "shield_wall"})
+		elif name == "grasp" and remain <= 40:
 			sim.submit("phalanx", {})
-		if name in ["judgment", "cleave", "grasp"]:
+		if name == "judgment":
+			sim.submit("ability", {"name": "body_block"})
 			sim.submit("shield", {})
-		if name == "judgment" and remain <= 18:
-			sim.submit("phalanx", {})
+			if remain <= 30:
+				sim.submit("phalanx", {})
+		elif name in ["cleave", "grasp"]:
+			sim.submit("shield", {})
 	for commit in sim._visible_commitments():
 		var plan := str(commit.get("plan", ""))
 		var remain: int = int(commit.get("land", 0)) - int(sim.tick)

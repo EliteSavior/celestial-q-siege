@@ -116,7 +116,23 @@ func refresh(snap: Dictionary) -> void:
 	if _boss.visible:
 		_boss.max_value = float(boss_max)
 		_boss.value = float(snap.boss_hp)
-		_boss_l.text = "Lucifer  %d" % int(snap.boss_hp)
+		var rising := int(snap.get("transform_until", 0)) > int(snap.tick)
+		var tg: Dictionary = snap.get("telegraph", {})
+		if rising:
+			var left := maxi(0, int(snap.transform_until) - int(snap.tick))
+			_boss_l.text = "Transforms  %0.1fs" % (float(left) / 20.0)
+		elif not tg.is_empty():
+			var left2 := maxi(0, int(tg.get("until", 0)) - int(snap.tick))
+			_boss_l.text = "%s  %0.1fs" % [str(tg.get("name", "")).replace("_", " "), float(left2) / 20.0]
+		else:
+			_boss_l.text = "Lucifer  %d" % int(snap.boss_hp)
+		if str(snap.get("echo_style", "")) != "":
+			_boss_l.text += "   echo %s" % str(snap.echo_style)
+			var wave: Array = snap.get("echo_units", [])
+			if wave.size() > 0:
+				_boss_l.text += "  wave %d" % wave.size()
+			if int(snap.get("echo_traps", 0)) > 0:
+				_boss_l.text += "  traps %d" % int(snap.echo_traps)
 	var lines: Array = snap.feed.slice(maxi(snap.feed.size() - 3, 0), snap.feed.size())
 	var text := ""
 	for row in lines:
@@ -197,8 +213,9 @@ func refresh(snap: Dictionary) -> void:
 		_end.visible = true
 		var secs2 := int(snap.tick) / 20
 		if str(snap.outcome) == "angels":
-			_end_label.text = "Lucifer falls.\nThe siege breaks.\n\n%d:%02d   angels standing   revives %d\nEcho was %s." % [
-				secs2 / 60, secs2 % 60, int(snap.stats.revives), str(snap.echo_style)
+			_end_label.text = "Lucifer falls.\nThe siege breaks.\n\n%d:%02d   angels standing   revives %d\nEcho was %s (%d in the wave, %d traps)." % [
+				secs2 / 60, secs2 % 60, int(snap.stats.revives), str(snap.echo_style),
+				snap.get("echo_units", []).size(), int(snap.get("echo_traps", 0))
 			]
 		else:
 			_end_label.text = "The party is extinguished.\n\n%d:%02d   the siege holds." % [secs2 / 60, secs2 % 60]
@@ -236,7 +253,7 @@ func _build_brief() -> void:
 	_brief.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_brief)
 	var l := Label.new()
-	l.text = "Celestial Q Siege\n\nFive angels, one squad. Each portrait is that angel's health. Tap the ground to move, a doorway to commit for 3 seconds, an enemy to focus.\n\nAttacks happen on their own. The five buttons spend Golden Elixir and route to the angel who owns them: Shield, Heal, Cleanse, Detect, Burst.\nTap a portrait for that angel's three actives. Drag while Uriel's beam is up to steer it.\nA downed angel has 3 seconds before the death is final. Heal, an emergency rite, or an altar charge can still reach them.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column. Scatter Roll and Phalanx Push are the reactions.\n\nThe demon commits an elite or a trap cluster with a cast bar before it lands. Quiet traps stay hidden until Detect. Curses show their cast before they take hold.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
+	l.text = "Celestial Q Siege\n\nFive angels, one squad. Each portrait is that angel's health. Tap the ground to move, a doorway to commit for 3 seconds, an enemy to focus.\n\nAttacks happen on their own. The five buttons spend Golden Elixir and route to the angel who owns them: Shield, Heal, Cleanse, Detect, Burst.\nTap a portrait for that angel's three actives. Drag while Uriel's beam is up to steer it.\nA downed angel has 3 seconds before the death is final. Heal, an emergency rite, or an altar charge can still reach them.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column. Scatter Roll and Phalanx Push are the reactions.\n\nThe demon commits an elite or a trap cluster with a cast bar before it lands. Quiet traps stay hidden until Detect. Curses show their cast before they take hold.\n\nThen the throne. The demon lord transforms for 3 seconds. Lucifer's four blows are marked the same way: hell rain (move), cleave (leave the lane), judgment (shield the marked angel), grasp (Phalanx). The echo is the siege you already fought — traps still bite, one wave arrives, nothing new is cursed."
 	l.position = Vector2(180, 70)
 	l.size = Vector2(920, 460)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
