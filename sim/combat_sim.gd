@@ -67,6 +67,7 @@ var focus_until := 0
 var phase := "dungeon"
 var outcome := ""
 var max_depth := 0
+var stage_reached := 0
 var rooms_cleared := 0
 var cleared := {}
 var visited := {}
@@ -79,6 +80,11 @@ var phalanx_until := 0
 var disengage_until := 0
 var altar_progress := 0
 var altar_done := false
+var seal_progress := 0
+var seal_done := false
+var font_progress := 0
+var font_done := false
+var cleanse_charges := 0
 var revive_charges := 0
 var pending_revives: Array = []
 var channeling_altar := false
@@ -155,6 +161,7 @@ func reset() -> void:
 	phase = "dungeon"
 	outcome = ""
 	max_depth = 0
+	stage_reached = 0
 	rooms_cleared = 0
 	cleared = {"start": true}
 	visited = {"start": true}
@@ -167,6 +174,11 @@ func reset() -> void:
 	disengage_until = 0
 	altar_progress = 0
 	altar_done = false
+	seal_progress = 0
+	seal_done = false
+	font_progress = 0
+	font_done = false
+	cleanse_charges = 0
 	revive_charges = 0
 	pending_revives = []
 	channeling_altar = false
@@ -201,7 +213,7 @@ func reset() -> void:
 	party_room_id = "start"
 	_prev_room = "start"
 	_spawn_heroes()
-	_log("The siege begins. The fork ahead is not one road.", "info")
+	_log("The siege begins. Three forks, three stakes, then the throne.", "info")
 
 
 func submit(type: String, args: Dictionary = {}, who: String = "angel", delay: int = 1) -> void:
@@ -236,7 +248,7 @@ func tick_once() -> void:
 	_zones_and_auras()
 	_curses_land()
 	_lucifer()
-	_altar()
+	_stakes()
 	_turtle()
 	_resolve_revives()
 	_clears()
@@ -343,17 +355,24 @@ func _begin_move(tile: Vector2i, room: String) -> void:
 	move_goal_room = room
 	move_goal_tile = tile
 	channeling_altar = false
-	if room in ["trapped", "summoned", "cursed"]:
+	if _is_branch_choice(room):
 		route_lock_room = room
 		route_lock_until = tick + Balance.ROUTE_LOCK_TICKS
 		var hint: String = str(map.by_id[room].hint)
 		_log("Committed: %s (%s)." % [map.by_id[room].name, hint], "info")
 
 
+func _is_branch_choice(room: String) -> bool:
+	var info = map.by_id.get(room, {})
+	if info.is_empty():
+		return false
+	return str(info.get("kind", "")) in ["trapped", "summoned", "cursed"]
+
+
 func _route_blocked(room: String) -> bool:
 	if room == "" or route_lock_until <= tick:
 		return false
-	if room not in ["trapped", "summoned", "cursed"]:
+	if not _is_branch_choice(room):
 		return false
 	return room != route_lock_room
 
@@ -792,7 +811,9 @@ func legal_trap(kind: String, node: String) -> String:
 func legal_spawn(unit: String, node: String) -> String:
 	if phase != "dungeon":
 		return "echo"
-	if not Balance.tier_ok(unit, max_depth):
+	if unit == "swarm" and seal_done:
+		return "sealed"
+	if not Balance.tier_ok(unit, rooms_cleared):
 		return "tier"
 	if Balance.summon_cost(unit) > dark:
 		return "dark"
@@ -827,12 +848,11 @@ func node_occupied_by_trap(node: String) -> bool:
 # --- simulation steps -------------------------------------------------------
 
 func _regen() -> void:
-	var stage := mini(rooms_cleared, 5)
-	var g := Balance.GOLDEN_REGEN_BASE + stage * Balance.REGEN_PER_STAGE
-	var d := Balance.DARK_REGEN_BASE + stage * Balance.REGEN_PER_STAGE
+	var idx := mini(stage_reached, 3)
 	if phase == "lucifer":
-		g += Balance.LUCIFER_REGEN_BONUS
-		d += Balance.LUCIFER_REGEN_BONUS
+		idx = 4
+	var g := Balance.golden_regen(idx)
+	var d := Balance.dark_regen(idx)
 	if corruption:
 		d += Balance.TURTLE_DARK_PER_TICK
 	golden = mini(Balance.ELIXIR_MAX, golden + g)
@@ -874,7 +894,7 @@ func _movement() -> void:
 
 
 func _idle_tick() -> void:
-	if phase == "lucifer":
+	if phase == "lucifer" or channeling_altar:
 		idle_ticks = 0
 		return
 	if _hostiles_in_room(party_room_id) > 0:
@@ -883,9 +903,8 @@ func _idle_tick() -> void:
 	var room = map.by_id.get(party_room_id, {})
 	if room.is_empty():
 		return
-	var is_cleared := bool(cleared.get(party_room_id, false)) or str(room.kind) == "start" or str(room.kind) == "corridor"
-	if party_room_id == "fork":
-		is_cleared = true
+	var kind := str(room.kind)
+	var is_cleared := bool(cleared.get(party_room_id, false)) or kind in ["start", "corridor", "fork", "seal", "font", "altar"]
 	if not is_cleared:
 		idle_ticks = 0
 		return
@@ -921,6 +940,8 @@ func _sync_room() -> void:
 	var room: Dictionary = map.by_id[id]
 	if int(room.depth) > max_depth:
 		max_depth = int(room.depth)
+	if int(room.get("stage", 0)) > stage_reached:
+		stage_reached = int(room.stage)
 
 
 func _passives() -> void:
@@ -1201,6 +1222,10 @@ func _curses_land() -> void:
 		if tgt.is_empty() or not tgt.alive:
 			continue
 		var kind := str(e.subtype)
+		if cleanse_charges > 0:
+			cleanse_charges -= 1
+			_log("The font burns the %s off %s." % [kind, tgt.name], "good")
+			continue
 		if kind == "silence":
 			tgt.silence_until = tick + Balance.SILENCE_TICKS
 			_log("%s is silenced." % tgt.name, "bad")
@@ -1300,37 +1325,117 @@ func _resolve_telegraph(boss: Dictionary) -> void:
 			_hurt(a3, Balance.GRASP_DMG if pulled else Balance.GRASP_DMG / 2, "boss", boss.id, true)
 
 
-func _altar() -> void:
-	if altar_done or phase == "lucifer":
+func _stakes() -> void:
+	if phase == "lucifer":
 		channeling_altar = false
 		return
-	if party_room_id != "altar":
-		if channeling_altar:
-			altar_progress = maxi(0, altar_progress - 2)
-		channeling_altar = false
+	var here := _stake_id()
+	for sid in ["seal", "font", "altar"]:
+		if sid == here or _stake_done_id(sid):
+			continue
+		if _stake_get(sid) > 0:
+			_stake_set(sid, maxi(0, _stake_get(sid) - 2))
+	if here == "" or _stake_done_id(here):
+		if here == "":
+			channeling_altar = false
 		return
 	if not channeling_altar:
 		return
-	if _hostiles_in_room("altar") > 0:
-		altar_progress = maxi(0, altar_progress - 4)
+	if _hostiles_in_room(here) > 0:
+		_stake_set(here, maxi(0, _stake_get(here) - 4))
 		return
-	var altar_pos := Fixed.tile_center(map.node_tile("altar:rear"))
+	var node := map.node_tile("%s:rear" % here)
+	var spot := Fixed.tile_center(node)
 	var close := false
 	for a in _angels():
-		if a.alive and Fixed.dist(a.pos, altar_pos) <= Balance.ALTAR_RANGE:
+		if a.alive and Fixed.dist(a.pos, spot) <= Balance.ALTAR_RANGE:
 			close = true
 			break
 	if not close:
-		altar_progress = maxi(0, altar_progress - 2)
+		_stake_set(here, maxi(0, _stake_get(here) - 2))
 		return
-	altar_progress += Balance.ALTAR_PER_TICK
-	if altar_progress >= Balance.ALTAR_NEED:
-		altar_progress = Balance.ALTAR_NEED
-		altar_done = true
-		revive_charges += 1
-		channeling_altar = false
-		_grant_golden(Balance.CLEAR_BOUNTY, "altar")
-		_log("The altar banks a revive charge.", "good")
+	var prog := _stake_get(here) + Balance.ALTAR_PER_TICK
+	_stake_set(here, prog)
+	if prog >= Balance.ALTAR_NEED:
+		_complete_stake(here)
+
+
+func _stake_id() -> String:
+	var info = map.by_id.get(party_room_id, {})
+	if info.is_empty():
+		return ""
+	if str(info.get("kind", "")) in ["seal", "font", "altar"]:
+		return party_room_id
+	return ""
+
+
+func _stake_done_id(id: String) -> bool:
+	match id:
+		"seal":
+			return seal_done
+		"font":
+			return font_done
+		"altar":
+			return altar_done
+		_:
+			return false
+
+
+func _stake_get(id: String) -> int:
+	match id:
+		"seal":
+			return seal_progress
+		"font":
+			return font_progress
+		"altar":
+			return altar_progress
+		_:
+			return 0
+
+
+func _stake_set(id: String, value: int) -> void:
+	match id:
+		"seal":
+			seal_progress = value
+		"font":
+			font_progress = value
+		"altar":
+			altar_progress = value
+
+
+func _complete_stake(id: String) -> void:
+	_stake_set(id, Balance.ALTAR_NEED)
+	channeling_altar = false
+	match id:
+		"seal":
+			seal_done = true
+			_log("The gate seal locks. Swarms can no longer be called.", "good")
+		"font":
+			font_done = true
+			cleanse_charges += 1
+			_log("The font banks a cleanse. The next curse burns away.", "good")
+		"altar":
+			altar_done = true
+			revive_charges += 1
+			_log("The altar banks a revive charge.", "good")
+	if not bool(cleared.get(id, false)):
+		_mark_cleared(id)
+
+
+func _stake_percent() -> int:
+	var id := _stake_id()
+	if id == "":
+		return 0
+	if _stake_done_id(id):
+		return 100
+	return mini(100, _stake_get(id) * 100 / maxi(Balance.ALTAR_NEED, 1))
+
+
+func _stake_label() -> String:
+	var id := _stake_id()
+	if id == "":
+		return ""
+	return str(map.by_id[id].name)
 
 
 func _turtle() -> void:
@@ -1363,20 +1468,25 @@ func _resolve_revives() -> void:
 
 
 func _clears() -> void:
-	for id in ["summoned", "cursed", "trapped", "cross"]:
-		if bool(cleared.get(id, false)):
-			continue
-		if not bool(visited.get(id, false)):
-			continue
-		if _hostiles_in_room(id) > 0:
-			continue
-		if id in ["trapped", "cursed"]:
-			var center: Vector2i = map.center_tile(id)
-			if anchor.x < center.x * 1000:
-				continue
-		_mark_cleared(id)
-	if altar_done and not bool(cleared.get("altar", false)):
-		_mark_cleared("altar")
+	if _prev_room != party_room_id:
+		_try_clear_room(_prev_room)
+
+
+func _try_clear_room(id: String) -> void:
+	if id == "" or bool(cleared.get(id, false)):
+		return
+	var room = map.by_id.get(id, {})
+	if room.is_empty() or bool(room.corridor):
+		return
+	var kind := str(room.kind)
+	# Stakes clear when claimed. Forks are decisions, not pushes.
+	if kind in ["start", "fork", "throne", "seal", "font", "altar"]:
+		return
+	if not bool(visited.get(id, false)):
+		return
+	if _hostiles_in_room(id) > 0:
+		return
+	_mark_cleared(id)
 
 
 func _mark_cleared(id: String) -> void:
@@ -1774,8 +1884,14 @@ func build_snapshot() -> Dictionary:
 		"kits": _KIT.duplicate(true),
 		"abilities": abilities,
 		"bar": bar,
-		"altar_progress": altar_progress,
+		"altar_progress": _stake_percent(),
 		"altar_done": altar_done,
+		"seal_done": seal_done,
+		"font_done": font_done,
+		"cleanse_charges": cleanse_charges,
+		"stake_id": _stake_id(),
+		"stake_name": _stake_label(),
+		"stage": stage_reached,
 		"revive_charges": revive_charges,
 		"corruption": corruption,
 		"corruption_warn": corruption_warned and not corruption,
@@ -1805,6 +1921,8 @@ func checksum() -> int:
 	h = Fixed.mix(h, tick)
 	h = Fixed.mix(h, golden)
 	h = Fixed.mix(h, dark)
+	h = Fixed.mix(h, stage_reached)
+	h = Fixed.mix(h, rooms_cleared)
 	h = Fixed.mix(h, stance)
 	h = Fixed.mix(h, focus_id)
 	h = Fixed.mix(h, anchor.x)
@@ -1824,8 +1942,9 @@ func debug_string() -> String:
 	var hp := []
 	for a in _angels():
 		hp.append("%s:%s/%s" % [a.subtype, a.hp if a.alive else "dead", a.hp_max])
-	return "t=%d room=%s g=%d d=%d phase=%s mobs=%d out=%s altar=%s [%s]" % [
-		tick, party_room_id, golden, dark, phase, mob_count(), outcome, altar_done, ", ".join(hp)
+	return "t=%d room=%s st=%d clr=%d g=%d d=%d phase=%s mobs=%d out=%s seal=%s font=%s altar=%s [%s]" % [
+		tick, party_room_id, stage_reached, rooms_cleared, golden, dark, phase, mob_count(), outcome,
+		seal_done, font_done, altar_done, ", ".join(hp)
 	]
 
 
@@ -2247,9 +2366,12 @@ func _armed_trap_count() -> int:
 func _hostiles_in_room(room: String) -> int:
 	var n := 0
 	for m in _living_mobs():
-		if str(m.get("home", m.get("room", ""))) == room or map.id_at_tile(Fixed.tile_of(m.pos)) == room:
-			if int(m.get("active_at", 0)) <= tick or str(m.kind) == "boss":
-				n += 1
+		var here := map.id_at_tile(Fixed.tile_of(m.pos)) == room
+		# A spawn still telegraphing in the room it was called to holds the party.
+		# Once it has walked out, it no longer keeps that room from clearing.
+		var spawning_here := str(m.get("home", "")) == room and int(m.get("active_at", 0)) > tick
+		if here or spawning_here:
+			n += 1
 	return n
 
 

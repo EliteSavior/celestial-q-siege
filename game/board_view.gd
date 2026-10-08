@@ -35,16 +35,21 @@ func handle_tap(screen: Vector2) -> void:
 		if Fixed.dist(milli, foe.pos) <= 900:
 			game.command("focus", {"id": int(foe.id)})
 			return
-	var altar: Vector2i = game.sim.map.node_tile("altar:rear")
-	if altar.x >= 0 and Fixed.dist(milli, Fixed.tile_center(altar)) <= 1400 and str(snap.party_room) == "altar":
-		if bool(snap.altar_done):
-			pass
-		elif int(snap.get("boss_hp_max", 0)) > 0:
-			pass
-		else:
-			game.command("channel_altar", {})
-			game.command("move_tile", {"tile": altar})
-			return
+	var stake_id := str(snap.get("stake_id", ""))
+	if stake_id != "":
+		var stake_node: Vector2i = game.sim.map.node_tile("%s:rear" % stake_id)
+		var claimed := false
+		if stake_id == "altar":
+			claimed = bool(snap.altar_done)
+		elif stake_id == "seal":
+			claimed = bool(snap.get("seal_done", false))
+		elif stake_id == "font":
+			claimed = bool(snap.get("font_done", false))
+		if stake_node.x >= 0 and Fixed.dist(milli, Fixed.tile_center(stake_node)) <= 1400 and not claimed:
+			if int(snap.get("boss_hp_max", 0)) <= 0:
+				game.command("channel_altar", {})
+				game.command("move_tile", {"tile": stake_node})
+				return
 	var best_d := 1600
 	var best := {}
 	for ex in snap.exits:
@@ -108,7 +113,8 @@ func _draw() -> void:
 		for node_name in room.nodes.keys():
 			var t: Vector2i = room.nodes[node_name]
 			var c := _tile_screen(t.x, t.y) + Vector2(TILE * 0.5, TILE * 0.5)
-			var mark := Color(0.85, 0.75, 0.35, 0.45) if str(node_name) == "rear" and str(room.id) == "altar" else Color(0.55, 0.5, 0.4, 0.35)
+			var stake_node := str(room.kind) in ["altar", "seal", "font"] and str(node_name) == "rear"
+			var mark := Color(0.85, 0.75, 0.35, 0.55) if stake_node else Color(0.55, 0.5, 0.4, 0.35)
 			draw_circle(c, 5, mark)
 	if snap.path is Array:
 		var prev := _milli_screen(snap.anchor)
@@ -159,7 +165,8 @@ func _draw() -> void:
 		var bp := view_pos + Vector2(view_size.x * 0.5 - 160, 18)
 		draw_string(font, bp, str(snap.banner), HORIZONTAL_ALIGNMENT_LEFT, -1, 32, Color(1, 0.82, 0.45))
 	if bool(snap.channeling) and font:
-		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Channeling the altar  %d%%" % int(snap.altar_progress), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
+		var stake_name := str(snap.get("stake_name", "the stake"))
+		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Channeling %s  %d%%" % [stake_name, int(snap.altar_progress)], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
 
 
 func _draw_telegraphs(font) -> void:
@@ -228,6 +235,12 @@ func _room_color(kind: String, here: bool) -> Color:
 			c = Color(0.16, 0.16, 0.18)
 		"altar":
 			c = Color(0.24, 0.2, 0.12)
+		"seal":
+			c = Color(0.18, 0.22, 0.28)
+		"font":
+			c = Color(0.16, 0.24, 0.22)
+		"gallery":
+			c = Color(0.22, 0.14, 0.12)
 		"throne":
 			c = Color(0.22, 0.08, 0.1)
 		"corridor":

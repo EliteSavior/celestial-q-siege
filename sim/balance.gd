@@ -8,11 +8,18 @@ const ELIXIR_MAX := 10000
 const GOLDEN_START := 4500
 const DARK_START := 4200
 
-# Milli-elixir added each tick. Stage 0 is deliberately slow.
-const GOLDEN_REGEN_BASE := 7
-const DARK_REGEN_BASE := 9
-const REGEN_PER_STAGE := 5
-const LUCIFER_REGEN_BONUS := 14
+# Milli-elixir per tick. Index is the stage reached (0 descent … 3 approach).
+# Index 4 is the Lucifer phase. Each step's gain is larger than the last,
+# so the finale is the explosive peak and the opening is deliberately poor.
+const GOLDEN_CURVE: Array[int] = [3, 6, 12, 24, 48]
+const DARK_CURVE: Array[int] = [5, 9, 16, 30, 54]
+
+# Summon tiers unlock by rooms cleared, not by the clock.
+# A fought crawl clears fewer rooms than a stroll, because some spawns
+# are still standing when the party moves on. These gates still fall
+# stage by stage: heavies with the Wards, the elite with the Sanctum.
+const HEAVY_ROOMS := 2
+const ELITE_ROOMS := 4
 
 const MOVE_SPEED := 165
 const COLUMN_SPEED_BONUS := 25
@@ -82,11 +89,14 @@ const BLINK_DMG := 12
 
 const ALTAR_RANGE := 1600
 const ALTAR_PER_TICK := 2
-const ALTAR_NEED := 100
+# 400 / 2 ticks = 10s to claim a stake. Long enough to be a hold, short of the turtle.
+const ALTAR_NEED := 400
 const ALTAR_REVIVE_DELAY := 20
 
-const LUCIFER_HP := 1200
-const LUCIFER_HP_EARLY := 900
+# The crawl is the siege. Lucifer is the climax, not most of the clock:
+# a healthy party burns this down in a couple of minutes of telegraphs.
+const LUCIFER_HP := 3200
+const LUCIFER_HP_EARLY := 2100
 const JUDGMENT_DMG := 48
 const CLEAVE_DMG := 34
 const HELL_RAIN_DMG := 26
@@ -243,14 +253,24 @@ static func ability_label(ability: String) -> String:
 			return ability
 
 
-static func tier_ok(unit: String, depth: int) -> bool:
+static func golden_regen(stage: int) -> int:
+	var i := clampi(stage, 0, GOLDEN_CURVE.size() - 1)
+	return int(GOLDEN_CURVE[i])
+
+
+static func dark_regen(stage: int) -> int:
+	var i := clampi(stage, 0, DARK_CURVE.size() - 1)
+	return int(DARK_CURVE[i])
+
+
+static func tier_ok(unit: String, rooms_cleared: int) -> bool:
 	match unit:
 		"swarm":
 			return true
 		"heavy":
-			return depth >= 1
+			return rooms_cleared >= HEAVY_ROOMS
 		"elite":
-			return depth >= 2
+			return rooms_cleared >= ELITE_ROOMS
 		_:
 			return false
 
