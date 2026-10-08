@@ -7,10 +7,10 @@ const TILE_W := 64.0
 const TILE_H := 32.0
 const INSET_L := 196.0
 const INSET_T := 120.0
-const INSET_B := 236.0
+const INSET_B := 320.0
 const INSET_R := 8.0
 const NARROW_W := 1200.0
-const NARROW_INSET_B := 308.0
+const NARROW_INSET_B := 340.0
 
 const TELL_COLOR := {
 	"silence": Color(0.38, 0.66, 1.0),
@@ -90,6 +90,8 @@ var _flash_until := {}
 
 
 var guide_drawn := false
+var _world: Control
+var _pen: CanvasItem
 
 
 func _ready() -> void:
@@ -97,7 +99,12 @@ func _ready() -> void:
 	# InputEventScreenTouch to this control; a full-rect IGNORE sibling lets
 	# them fall through to whatever STOP control is behind it.
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	RenderingServer.canvas_item_set_clip(get_canvas_item(), true)
+	_world = _WorldLayer.new()
+	_world.board = self
+	_world.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_world.clip_contents = true
+	add_child(_world)
+	_pen = _world
 
 
 func zoom_level() -> float:
@@ -399,7 +406,6 @@ func _door_at(snap_in: Dictionary) -> Vector2i:
 
 
 func _draw_guide(font) -> void:
-	guide_drawn = false
 	var g := guide(snap)
 	var at: Vector2i = g.at
 	if at == Vector2i.ZERO:
@@ -483,10 +489,25 @@ func _draw() -> void:
 	guide_drawn = false
 	if snap.is_empty() or game == null:
 		return
-	var font := ThemeDB.fallback_font
 	var view_pos := _view_origin()
 	var view_size := _view_size()
-	RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(view_pos, view_size))
+	if _world:
+		_world.position = view_pos
+		_world.size = view_size
+		_world.queue_redraw()
+	var g := guide(snap)
+	if g.at != Vector2i.ZERO:
+		guide_drawn = true
+
+
+func _paint_world() -> void:
+	if snap.is_empty() or game == null:
+		return
+	_pen = _world if _world != null else self
+	var font := ThemeDB.fallback_font
+	var view_pos := _view_origin()
+	draw_set_transform(Vector2(-view_pos.x, -view_pos.y), 0.0, Vector2.ONE)
+	var view_size := _view_size()
 	draw_rect(Rect2(view_pos, view_size), Color(0.03, 0.03, 0.05))
 	var map = game.sim.map
 	var vis := {}
@@ -591,6 +612,7 @@ func _draw() -> void:
 			if hint != "":
 				_plaque(font, sp + Vector2(-34, -28), hint, Color(0.08, 0.06, 0.04), hc2, 15)
 			draw_string(font, sp + Vector2(-40, 18), str(ex2.label), HORIZONTAL_ALIGNMENT_LEFT, 120, 12, Color(1, 0.97, 0.88))
+	var pop_at := {}
 	for pop in snap.popups:
 		if font:
 			var age := int(snap.tick) - int(pop.tick)
@@ -602,7 +624,11 @@ func _draw() -> void:
 				colp = Color(0.4, 1.0, 0.52)
 			elif kind == "dmg":
 				colp = Color(1.0, 0.92, 0.45)
-			var at := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.4)
+			var key := "%s,%s" % [pop.pos.x, pop.pos.y]
+			var n := int(pop_at.get(key, 0))
+			pop_at[key] = n + 1
+			var fan := Vector2(float(n % 3 - 1) * 28.0, -float(n / 3) * 18.0)
+			var at := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.4) + fan
 			draw_string(font, at + Vector2(1, 1), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0, 0, 0, 0.85))
 			draw_string(font, at, str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, colp)
 	_draw_guide(font)
@@ -1216,6 +1242,14 @@ func _draw_fog_edge(tx: int, ty: int, vis: Dictionary, map, center: Vector2) -> 
 		if not hidden:
 			continue
 		draw_line(edges[i], edges[i + 1], ink, maxf(3.0, 4.0 * zoom))
+
+
+class _WorldLayer:
+	extends Control
+	var board
+	func _draw() -> void:
+		if board:
+			board._paint_world()
 
 
 func _plaque(font, at: Vector2, text: String, fg: Color, bg: Color, sz: int) -> void:
