@@ -1,9 +1,11 @@
 extends Control
-## Placeholder main scene for Celestial Q Siege.
-## Build-pipeline scaffolding only: it just shows the title so we can confirm
-## that Godot -> Android APK export works. No game logic lives here yet.
+## Combat Lab entry. The simulation lives in sim/; this scene only hosts it.
 
 
 func _ready() -> void:
-	$TitleLabel.text = "Celestial Q Siege"
-	print("Celestial Q Siege scaffold v%s started" % ProjectSettings.get_setting("application/config/version"))
+	for child in get_children():
+		child.queue_free()
+	var game := GameRoot.new()
+	game.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(game)
+	print("Celestial Q Siege combat lab v%s" % ProjectSettings.get_setting("application/config/version"))
