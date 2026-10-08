@@ -141,10 +141,10 @@ func refresh(snap: Dictionary) -> void:
 	_dark.max_value = max_e
 	_golden.value = float(snap.golden)
 	_dark.value = float(snap.dark)
-	var g_rate := float(snap.get("golden_regen", 0)) * float(Balance.TICK_HZ) / 1000.0
-	var d_rate := float(snap.get("dark_regen", 0)) * float(Balance.TICK_HZ) / 1000.0
-	_golden_l.text = "Golden  %0.1f/%0.0f  +%0.2f/s" % [float(snap.golden) / 1000.0, max_e / 1000.0, g_rate]
-	_dark_l.text = "Dark  %0.1f/%0.0f  +%0.2f/s" % [float(snap.dark) / 1000.0, max_e / 1000.0, d_rate]
+	var g_rate := float(snap.get("golden_regen", 0)) * float(Balance.TICK_HZ) / float(Balance.POINT)
+	var d_rate := float(snap.get("dark_regen", 0)) * float(Balance.TICK_HZ) / float(Balance.POINT)
+	_golden_l.text = "Golden  %d/%d  +%0.1f/s" % [Balance.points_of(int(snap.golden)), Balance.points_of(int(max_e)), g_rate]
+	_dark_l.text = "Dark  %d/%d  +%0.1f/s" % [Balance.points_of(int(snap.dark)), Balance.points_of(int(max_e)), d_rate]
 	var secs := int(snap.tick) / 20
 	_clock.text = "%d:%02d" % [secs / 60, secs % 60]
 	var room := str(snap.party_room)
@@ -816,7 +816,7 @@ func _clear_pressed(btn: Button) -> void:
 
 
 func _apply_ability_button(btn: Button, info: Dictionary) -> void:
-	var cost := float(info.cost) / 1000.0
+	var cost := float(Balance.points_of(int(info.cost)))
 	var cd := int(info.cd_left)
 	var extra := ""
 	if not bool(info.ready):

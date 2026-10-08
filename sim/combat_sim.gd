@@ -50,6 +50,8 @@ var seq := 0
 
 var golden := Balance.GOLDEN_START
 var dark := Balance.DARK_START
+# Successful Golden spends. View and tests read it; it never changes a tick.
+var ability_casts := 0
 var angel_acted := false
 var stance := STANCE_TIGHT
 var facing := Vector2i(1, 0)
@@ -153,6 +155,7 @@ func reset() -> void:
 	seq = 0
 	golden = Balance.GOLDEN_START
 	dark = Balance.DARK_START
+	ability_casts = 0
 	angel_acted = false
 	stance = STANCE_TIGHT
 	facing = Vector2i(1, 0)
@@ -500,6 +503,7 @@ func _cast(ability: String, args: Dictionary = {}) -> void:
 	if not _apply_ability(ability, owner, args):
 		return
 	golden -= price
+	ability_casts += 1
 	owner.cooldowns[ability] = tick + Balance.cooldown(ability)
 
 
@@ -3343,6 +3347,54 @@ func _copy_unit(e: Dictionary) -> Dictionary:
 		"downed": not bool(e.alive) and not bool(e.get("final_death", false)) and str(e.kind) == "angel",
 		"downed_left": maxi(0, int(e.get("downed_until", 0)) - tick) if (not bool(e.alive) and not bool(e.get("final_death", false))) else 0,
 		"final_death": bool(e.get("final_death", false)),
+		"statuses": unit_statuses(e),
+	}
+
+
+## View-only buff and debuff rows. The indicator layer reads this; nothing
+## here is written back into the tick.
+func unit_statuses(e: Dictionary) -> Array:
+	var out: Array = []
+	_push_timed(out, e, "silence", "debuff", "SIL", "silence_until")
+	_push_timed(out, e, "rot", "debuff", "ROT", "rot_until")
+	_push_timed(out, e, "mark", "debuff", "MRK", "mark_until")
+	_push_timed(out, e, "weaken", "debuff", "WEK", "weaken_until")
+	var shield := int(e.get("shield", 0))
+	if shield > 0:
+		out.append(_status_row("shield", "buff", "SH", shield, 0))
+	var rad := int(e.get("radiance", 0))
+	if rad > 0:
+		out.append(_status_row("radiance", "buff", "DMG", rad, 0))
+	if int(e.get("body_block_until", 0)) > tick:
+		out.append(_status_row("block", "buff", "BLK", 1, int(e.body_block_until) - tick))
+	var phx := int(e.get("phalanx", 0))
+	if phx > 0 and tick < phalanx_until:
+		out.append(_status_row("phalanx", "buff", "PHX", phx, phalanx_until - tick))
+	if str(e.get("kind", "")) == "angel" and bool(e.get("alive", false)) and tick < shield_wall_until:
+		out.append(_status_row("wall", "buff", "WALL", 1, shield_wall_until - tick))
+	if tick < taunt_until and taunt_id != 0:
+		if str(e.get("subtype", "")) == "michael" and bool(e.get("alive", false)):
+			out.append(_status_row("taunt", "buff", "TNT", 1, taunt_until - tick))
+		if int(e.get("id", -1)) == taunt_id:
+			out.append(_status_row("taunt", "debuff", "TNT", 1, taunt_until - tick))
+	if int(e.get("untargetable_until", 0)) > tick:
+		out.append(_status_row("safe", "buff", "SAFE", 1, int(e.untargetable_until) - tick))
+	return out
+
+
+func _push_timed(out: Array, e: Dictionary, id: String, polarity: String, label: String, field: String) -> void:
+	var until := int(e.get(field, 0))
+	if until > tick:
+		out.append(_status_row(id, polarity, label, 1, until - tick))
+
+
+func _status_row(id: String, polarity: String, label: String, stacks: int, left: int) -> Dictionary:
+	return {
+		"id": id,
+		"polarity": polarity,
+		"label": label,
+		"stacks": stacks,
+		"left": left,
 	}
 
 
