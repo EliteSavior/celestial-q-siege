@@ -4,12 +4,13 @@ extends RefCounted
 
 const TICK_HZ := 20
 const MILLI := 1000
-const ELIXIR_MAX := 10000
-# Opening Golden covers Shield (3) and a Heal (1.5) and still leaves 2.0,
-# enough for a Cleanse (1.5) or one 2.0 active, not a Burst (3).
-# Was 5000 (a 0.5 cushion) in 1.0.0. Regen itself is unchanged: the crawl's
-# length is the road, and speeding the curve would pull a competent run under 8 minutes.
-const GOLDEN_START := 6500
+# One player-facing elixir point. The sim stays integer; the bar reads 0–100.
+const POINT := 100
+const ELIXIR_MAX := 10000 # 100 points
+# 1.0.4 opening is 36 points: Taunt 8 + Mend 6 + Strike 10 + Shield 12.
+# That is a real opener, not also a Sunstrike (14) or a Party Heal (15).
+# 1.0.3 was 6500 internal, shown as 6.5 on a 0–10 meter (about two casts).
+const GOLDEN_START := 3600
 const DARK_START := 4200
 # 8 seconds. Until the first angel command resolves, or this many ticks pass,
 # Dark regen is frozen and the turtle clock does not advance. Golden still
@@ -17,10 +18,13 @@ const DARK_START := 4200
 # on the first tick never sees the hold.
 const OPENING_GRACE_TICKS := 160
 
-# Milli-elixir per tick. Index is the stage reached (0 descent … 3 approach).
-# Index 4 is the Lucifer phase. Each step's gain is larger than the last,
-# so the finale is the explosive peak and the opening is deliberately poor.
-const GOLDEN_CURVE: Array[int] = [3, 6, 12, 24, 48]
+# Internal elixir per tick (100 internal = 1 point). Index is the stage
+# reached (0 descent … 3 approach). Index 4 is the Lucifer phase.
+# Golden was [3, 6, 12, 24, 48] in 1.0.3 (0.06–0.96 of the old 0–10 meter
+# per second). Descent is now 4 points/sec so a Heavy or Elite fight can
+# fund several casts; each later stage still accelerates.
+# Dark regen is unchanged from 1.0.3, so the director buys the same siege.
+const GOLDEN_CURVE: Array[int] = [20, 40, 80, 160, 320]
 const DARK_CURVE: Array[int] = [5, 9, 16, 30, 54]
 
 # Summon tiers unlock by rooms cleared, not by the clock.
@@ -113,7 +117,8 @@ const HEAL_PARTY := 32
 const REVIVE_CHANNEL := 60
 const REVIVE_PCT := 40
 const REVIVE_INTERRUPT := 14
-const REVIVE_REFUND := 3000
+# Half of Slow Revive (18 points). Was 3000 when that rite cost 6000.
+const REVIVE_REFUND := 900
 const BURST_DMG := 74
 # Azrael's elixir strike. Melee, single target, heavier than Burst.
 const STRIKE_DMG := 108
@@ -190,8 +195,10 @@ const ELITE_RANGE := 1300
 const ELITE_SPEED := 88
 
 # The crawl is the siege. Lucifer is the climax, not most of the clock:
-# a healthy party burns this down in about two minutes of telegraphs.
-const LUCIFER_HP := 3700
+# about two minutes of telegraphs. 1.0.3 was 3700. Golden now funds bursts
+# through the fight, so the same body died in ~85s; 4600 puts a casting
+# party back in the 1.5–2 minute climax without touching mob HP.
+const LUCIFER_HP := 4600
 const LUCIFER_HP_EARLY := 2100
 const JUDGMENT_DMG := 48
 const CLEAVE_DMG := 34
@@ -203,30 +210,40 @@ const CLEAVE_HALF_WIDTH := 700
 const CLEAVE_LENGTH := 5600
 
 
-static func cost(ability: String) -> int:
+## Player-facing cost on the 0–100 bar. Cheap utility sits low; nukes and
+## the two revives sit at the top of the 5–20 band. Scatter and Phalanx are free.
+static func point_cost(ability: String) -> int:
 	match ability:
-		"taunt", "body_block", "disarm", "escape_dash", "disengage", "self_shield":
-			return 2000
-		"single_heal", "cleanse":
-			return 1500
-		"strike":
-			return 2500
-		"shield_wall", "burst", "beam":
-			return 3000
-		"sunstrike":
-			return 3500
-		"party_heal", "aoe_zone":
-			return 4000
-		"slow_revive":
-			return 6000
-		"emergency_res":
-			return 8000
 		"detect_pulse":
-			return 1000
+			return 5
+		"single_heal", "cleanse":
+			return 6
+		"taunt", "body_block", "disarm", "escape_dash", "disengage", "self_shield":
+			return 8
+		"strike":
+			return 10
+		"shield_wall", "burst", "beam":
+			return 12
+		"sunstrike":
+			return 14
+		"party_heal", "aoe_zone":
+			return 15
+		"slow_revive":
+			return 18
+		"emergency_res":
+			return 20
 		"scatter", "phalanx":
 			return 0
 		_:
 			return 0
+
+
+static func cost(ability: String) -> int:
+	return point_cost(ability) * POINT
+
+
+static func points_of(internal: int) -> int:
+	return internal / POINT
 
 
 static func cooldown(ability: String) -> int:

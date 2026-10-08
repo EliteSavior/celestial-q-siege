@@ -14,7 +14,10 @@ var pulsed := {}
 var act_every := 5
 var react_remain := 40
 var heal_below := 80
-var burst_at := 6000
+var burst_at := 5000
+# Loose bursts once a Mend would still fit behind the nuke. 1.0.3 waited
+# until 4000 of a 0–10 meter (shown as 4.0), which was most of a Burst.
+var burst_loose_at := 2800
 var burst_loose := true
 var pre_shield := true
 
@@ -85,14 +88,14 @@ func _defense(sim) -> void:
 	if sim.lowest_angel_hp_pct() < heal_below or sim._downed_count() > 0:
 		sim.submit("heal", {})
 	var raphael: Dictionary = sim._hero("raphael")
-	if sim._downed_count() > 0 and not raphael.is_empty() and raphael.alive and sim.golden >= 6000:
+	if sim._downed_count() > 0 and not raphael.is_empty() and raphael.alive and sim.golden >= Balance.cost("slow_revive"):
 		sim.submit("ability", {"name": "slow_revive"})
-	if sim._downed_count() > 0 and sim.golden >= 8000:
+	elif sim._downed_count() > 0 and sim.golden >= Balance.cost("emergency_res"):
 		sim.submit("ability", {"name": "emergency_res"})
 	var room := str(sim.party_room())
-	if not pulsed.has(room) and sim.golden >= 5500:
+	if not pulsed.has(room) and sim.golden >= Balance.cost("detect_pulse") + Balance.cost("single_heal"):
 		var preview: Dictionary = sim.preview("detect")
-		if str(preview.ability) == "disarm" or sim.golden >= 6500:
+		if str(preview.ability) == "disarm" or sim.golden >= Balance.GOLDEN_START:
 			sim.submit("detect", {})
 			pulsed[room] = true
 	elif str(sim.preview("detect").ability) == "disarm":
@@ -106,9 +109,9 @@ func _offense(sim) -> void:
 	if focus == 0:
 		return
 	# While someone is still in the downed window, keep enough Golden for a slow revive.
-	if sim._downed_count() > 0 and sim.golden < 6000 + Balance.cost("burst"):
+	if sim._downed_count() > 0 and sim.golden < Balance.cost("slow_revive") + Balance.cost("burst"):
 		return
-	if sim.golden >= burst_at or (burst_loose and sim.golden >= 4000 and sim.lowest_angel_hp_pct() > 75):
+	if sim.golden >= burst_at or (burst_loose and sim.golden >= burst_loose_at and sim.lowest_angel_hp_pct() > 75):
 		sim.submit("burst", {})
 
 

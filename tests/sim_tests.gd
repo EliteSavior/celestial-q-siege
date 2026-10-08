@@ -8,12 +8,40 @@ var ran := 0
 ## runs between frames.
 var after_frame: Array = []
 
+const POINT_COSTS := {
+	"detect_pulse": 5,
+	"single_heal": 6,
+	"cleanse": 6,
+	"taunt": 8,
+	"body_block": 8,
+	"disarm": 8,
+	"escape_dash": 8,
+	"disengage": 8,
+	"self_shield": 8,
+	"strike": 10,
+	"shield_wall": 12,
+	"burst": 12,
+	"beam": 12,
+	"sunstrike": 14,
+	"party_heal": 15,
+	"aoe_zone": 15,
+	"slow_revive": 18,
+	"emergency_res": 20,
+	"scatter": 0,
+	"phalanx": 0,
+}
+
 
 func run_all() -> int:
 	var tests := [
 		"test_map_connects",
 		"test_elixir_compounds_by_stage",
 		"test_opening_bank_funds_the_first_decision",
+		"test_elixir_bar_is_zero_to_one_hundred",
+		"test_ability_point_costs_are_spent",
+		"test_golden_regen_over_ticks",
+		"test_debuff_statuses_are_queryable",
+		"test_skill_use_during_a_fight",
 		"test_tiers_follow_rooms_cleared",
 		"test_seal_blocks_swarms_and_font_eats_curse",
 		"test_fixed_math",
@@ -119,18 +147,205 @@ func test_map_connects() -> void:
 
 func test_opening_bank_funds_the_first_decision() -> void:
 	var sim := CombatSim.new()
-	# 1.0.1: 6500 milli (6.5). Shield 3000 + Heal 1500 leaves 2000,
-	# a Cleanse or one 2.0 active, not a Burst (3000). Was 5000 in 1.0.0.
-	if sim.golden != 6500:
-		fail("opening golden %d, want 6500" % sim.golden)
+	# 1.0.4: 36 points. Taunt + Mend + Strike + Shield, not also Sunstrike.
+	# 1.0.3 opened at 6500 internal (6.5 on the old 0–10 meter).
+	if sim.golden != Balance.GOLDEN_START:
+		fail("opening golden %d, want %d" % [sim.golden, Balance.GOLDEN_START])
 		return
-	var need := Balance.cost("shield_wall") + Balance.cost("single_heal")
-	var cushion := sim.golden - need
-	if cushion != 2000:
-		fail("opening cushion %d, want 2000" % cushion)
+	if Balance.points_of(sim.golden) != 36:
+		fail("opening is %d points, want 36" % Balance.points_of(sim.golden))
 		return
-	if cushion >= Balance.cost("burst"):
-		fail("opening cushion %d funds a burst" % cushion)
+	var opener := Balance.cost("taunt") + Balance.cost("single_heal") + Balance.cost("strike") + Balance.cost("shield_wall")
+	if sim.golden != opener:
+		fail("opening %d is not the four-cast opener %d" % [sim.golden, opener])
+		return
+	if sim.golden + Balance.golden_regen(0) >= opener + Balance.cost("sunstrike"):
+		fail("the first tick also funds a sunstrike on top of the opener")
+
+
+func test_elixir_bar_is_zero_to_one_hundred() -> void:
+	if Balance.POINT != 100 or Balance.ELIXIR_MAX != 100 * Balance.POINT:
+		fail("bar max %d is not 100 points" % Balance.ELIXIR_MAX)
+		return
+	if Balance.points_of(Balance.ELIXIR_MAX) != 100:
+		fail("display max %d" % Balance.points_of(Balance.ELIXIR_MAX))
+		return
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	if sim.golden < 0 or sim.golden > Balance.ELIXIR_MAX:
+		fail("opening golden %d outside 0–100" % sim.golden)
+		return
+	if sim.dark < 0 or sim.dark > Balance.ELIXIR_MAX:
+		fail("opening dark %d outside 0–100" % sim.dark)
+		return
+	# Dark keeps 1.0.3 purchasing power on the shared meter.
+	if Balance.points_of(Balance.DARK_START) != 42:
+		fail("dark start rescaled to %d" % Balance.points_of(Balance.DARK_START))
+		return
+	if Balance.points_of(Balance.summon_cost("swarm")) != 16:
+		fail("swarm cost rescaled")
+		return
+	if Balance.dark_regen(0) != 5:
+		fail("dark regen changed")
+		return
+	sim.golden = Balance.ELIXIR_MAX
+	sim.dark = Balance.ELIXIR_MAX
+	sim.tick_once()
+	if sim.golden != Balance.ELIXIR_MAX or sim.dark != Balance.ELIXIR_MAX:
+		fail("bar left 0–100 golden %d dark %d" % [sim.golden, sim.dark])
+
+
+func test_ability_point_costs_are_spent() -> void:
+	for ability in POINT_COSTS.keys():
+		var want: int = int(POINT_COSTS[ability])
+		if Balance.point_cost(ability) != want:
+			fail("%s costs %d points, want %d" % [ability, Balance.point_cost(ability), want])
+			return
+		if Balance.cost(ability) != want * Balance.POINT:
+			fail("%s internal %d" % [ability, Balance.cost(ability)])
+			return
+		if want != 0 and (want < 5 or want > 20):
+			fail("%s point cost %d is outside 5–20" % [ability, want])
+			return
+		if want == 0:
+			continue
+		var sim := _lab()
+		if not _prime_cast(sim, ability):
+			return
+		var before := sim.golden
+		sim.submit("ability", {"name": ability})
+		sim.tick_once()
+		var bounty := 0
+		if ability == "cleanse":
+			bounty = Balance.CLEANSE_BOUNTY
+		elif ability == "disarm":
+			bounty = Balance.DISARM_BOUNTY
+		var expect := before - Balance.cost(ability) + Balance.golden_regen(sim.stage_reached) + bounty
+		if sim.golden != expect:
+			fail("%s spent to %d, want %d (%s)" % [ability, sim.golden, expect, _feed(sim)])
+			return
+		if sim.ability_casts != 1:
+			fail("%s did not count a cast (%d)" % [ability, sim.ability_casts])
+			return
+
+
+func test_golden_regen_over_ticks() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var n := 40
+	var before := sim.golden
+	for _i in n:
+		sim.tick_once()
+	var gain := sim.golden - before
+	var want := Balance.golden_regen(0) * n
+	if gain != want:
+		fail("stage 0 regen %d over %d ticks, want %d" % [gain, n, want])
+		return
+	# 4 points/sec at 20 Hz, held exactly.
+	if gain != 4 * Balance.POINT * n / Balance.TICK_HZ:
+		fail("stage 0 is not 4 points/sec (%d)" % gain)
+		return
+	sim.stage_reached = 3
+	before = sim.golden
+	for _j in 10:
+		sim.tick_once()
+	if sim.golden - before != Balance.golden_regen(3) * 10:
+		fail("stage 3 regen %d" % (sim.golden - before))
+		return
+	sim.golden = Balance.ELIXIR_MAX - 30
+	sim.tick_once()
+	if sim.golden != Balance.ELIXIR_MAX:
+		fail("regen crossed the 100-point cap to %d" % sim.golden)
+
+
+func test_debuff_statuses_are_queryable() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	sim.submit("curse", {"kind": "silence", "target": "raphael"}, "demon", 1)
+	for _i in Balance.CURSE_CAST + 3:
+		sim.tick_once()
+	var raphael := sim._hero("raphael")
+	raphael.rot_until = sim.tick + 40
+	raphael.mark_until = sim.tick + 20
+	raphael.weaken_until = sim.tick + 10
+	raphael.shield = 55
+	raphael.radiance = 3
+	var rows: Array = sim.unit_statuses(raphael)
+	for id in ["silence", "rot", "mark", "weaken"]:
+		var row := _status_named(rows, id)
+		if row.is_empty():
+			fail("%s missing from the indicator query" % id)
+			return
+		if str(row.polarity) != "debuff":
+			fail("%s is not a debuff" % id)
+			return
+		if int(row.left) <= 0:
+			fail("%s has no timer" % id)
+			return
+	var sh := _status_named(rows, "shield")
+	if sh.is_empty() or int(sh.stacks) != 55 or str(sh.polarity) != "buff":
+		fail("shield badge %s" % str(sh))
+		return
+	if _status_named(rows, "radiance").is_empty() or int(_status_named(rows, "radiance").stacks) != 3:
+		fail("damage buff missing")
+		return
+	var mob := _mob(sim, "imp", sim._hero("michael").pos + Vector2i(180, 0), 400)
+	sim.golden = 8000
+	sim._hero("michael").cooldowns.erase("taunt")
+	sim._hero("michael").cooldowns.erase("shield_wall")
+	sim.submit("ability", {"name": "taunt"})
+	sim.submit("ability", {"name": "shield_wall"})
+	sim.tick_once()
+	if _status_named(sim.unit_statuses(sim._hero("michael")), "taunt").is_empty():
+		fail("Michael is taunting with no badge")
+		return
+	if _status_named(sim.unit_statuses(mob), "taunt").is_empty():
+		fail("taunted imp has no badge")
+		return
+	var walled := 0
+	for angel in sim._angels():
+		if bool(angel.alive) and not _status_named(sim.unit_statuses(angel), "wall").is_empty():
+			walled += 1
+	if walled != 5:
+		fail("shield wall badges %d" % walled)
+		return
+	var snap := sim.build_snapshot()
+	var published := false
+	for a in snap.angels:
+		if str(a.subtype) != "raphael":
+			continue
+		for st in a.get("statuses", []):
+			if str(st.get("id", "")) == "silence" and int(st.get("left", 0)) > 0:
+				published = true
+	if not published:
+		fail("snapshot hid silence from the indicator layer")
+
+
+func test_skill_use_during_a_fight() -> void:
+	# Autos still kill. Skills are extra casts the 1.0.3 bar could not fund.
+	var imp := _skill_fight("imp", Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, true)
+	var heavy := _skill_fight("heavy", Balance.HEAVY_HP, Balance.HEAVY_ATK, Balance.HEAVY_PERIOD, Balance.HEAVY_RANGE, true)
+	var elite := _skill_fight("elite", Balance.ELITE_HP, Balance.ELITE_ATK, Balance.ELITE_PERIOD, Balance.ELITE_RANGE, true)
+	print("  skill casts imp=%d heavy=%d elite=%d" % [int(imp.casts), int(heavy.casts), int(elite.casts)])
+	if not bool(imp.dead) or not bool(imp.party):
+		fail("imp fight was not winnable with skills dead=%s party=%s" % [imp.dead, imp.party])
+		return
+	if int(imp.casts) < 3:
+		fail("imp fight only cast %d abilities" % int(imp.casts))
+		return
+	if not bool(heavy.dead) or int(heavy.casts) < 5:
+		fail("heavy fight casts=%d dead=%s" % [int(heavy.casts), heavy.dead])
+		return
+	if not bool(elite.dead) or int(elite.casts) < 7:
+		fail("elite fight casts=%d dead=%s" % [int(elite.casts), elite.dead])
+		return
+	var naked := _skill_fight("heavy", Balance.HEAVY_HP, Balance.HEAVY_ATK, Balance.HEAVY_PERIOD, Balance.HEAVY_RANGE, false)
+	if int(naked.casts) != 0:
+		fail("idle fight cast %d" % int(naked.casts))
+		return
+	if int(heavy.party_hp) <= int(naked.party_hp):
+		fail("skills did not protect the party (%d vs %d)" % [int(heavy.party_hp), int(naked.party_hp)])
 
 
 func test_elixir_compounds_by_stage() -> void:
@@ -140,8 +355,10 @@ func test_elixir_compounds_by_stage() -> void:
 		var g := Balance.golden_regen(s)
 		if Balance.dark_regen(s) <= 0:
 			fail("dark regen missing at %d" % s)
-		if s == 0 and g > 4:
-			fail("opening golden regen %d is not slow" % g)
+		if s == 0 and g <= 3:
+			fail("opening golden regen %d was not raised from 1.0.3" % g)
+		if s == 0 and g * Balance.TICK_HZ >= Balance.cost("single_heal") * 2:
+			fail("opening regen %d funds two mends a second" % g)
 		if s > 0:
 			var step := g - prev
 			if step <= prev_step:
@@ -1326,7 +1543,7 @@ func test_competent_policy_can_win() -> void:
 	var crawl_s := float(lucifer_tick) / 20.0
 	var total_s := float(sim.tick) / 20.0
 	var boss_s := total_s - crawl_s if lucifer_tick >= 0 else -1.0
-	print("  pacing crawl=%0.1fs boss=%0.1fs total=%0.1fs outcome=%s" % [crawl_s, boss_s, total_s, sim.outcome])
+	print("  pacing crawl=%0.1fs boss=%0.1fs total=%0.1fs outcome=%s casts=%d" % [crawl_s, boss_s, total_s, sim.outcome, sim.ability_casts])
 	if sim.outcome != "angels":
 		fail("policy did not win: %s" % sim.debug_string())
 		print(_feed(sim))
@@ -1826,6 +2043,92 @@ func _lab() -> CombatSim:
 	sim.stance = CombatSim.STANCE_SPREAD
 	sim.golden = 9000
 	return sim
+
+
+func _prime_cast(sim: CombatSim, ability: String) -> bool:
+	var owner_name := Balance.owner_of(ability)
+	if owner_name == "":
+		fail("%s has no owner" % ability)
+		return false
+	var owner: Dictionary = sim._hero(owner_name)
+	owner.cooldowns.erase(ability)
+	sim.golden = 8000
+	if ability in ["taunt", "strike", "burst", "sunstrike", "beam", "aoe_zone"]:
+		_mob(sim, "imp", owner.pos + Vector2i(220, 0), 900)
+	if ability == "disarm":
+		var trap := _plant(sim, owner.pos + Vector2i(200, 0))
+		trap.revealed = true
+		trap.armed = true
+	if ability == "cleanse":
+		sim._hero("michael").silence_until = sim.tick + 80
+	if ability == "slow_revive":
+		var down: Dictionary = sim._hero("azrael")
+		down.alive = false
+		down.hp = 0
+		down.final_death = false
+	if ability == "emergency_res":
+		var fallen: Dictionary = sim._hero("uriel")
+		fallen.alive = false
+		fallen.hp = 0
+		fallen.final_death = false
+	return true
+
+
+func _status_named(rows: Array, id: String) -> Dictionary:
+	for row in rows:
+		if str(row.get("id", "")) == id:
+			return row
+	return {}
+
+
+func _skill_fight(subtype: String, hp: int, atk: int, period: int, mob_range: int, spend: bool) -> Dictionary:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.stance = CombatSim.STANCE_TIGHT
+	var michael := sim._hero("michael")
+	sim._make_mob(subtype, subtype, michael.pos + Vector2i(280, 0), hp, atk, period, mob_range, 0, [], "start:center")
+	var mob: Dictionary = sim.entities[sim.next_id - 1]
+	mob.active_at = 0
+	mob.pulled = true
+	var guard := 0
+	while bool(mob.alive) and sim.outcome == "" and guard < 20 * 40:
+		if spend:
+			_mash_skills(sim)
+		sim.tick_once()
+		guard += 1
+	var party := 0
+	var alive := false
+	for a in sim._angels():
+		if bool(a.alive):
+			alive = true
+			party += int(a.hp)
+	return {
+		"casts": sim.ability_casts,
+		"dead": not bool(mob.alive),
+		"party": alive and sim.outcome != "demons",
+		"party_hp": party,
+		"hp_left": int(mob.hp),
+	}
+
+
+func _mash_skills(sim: CombatSim) -> void:
+	if sim.tick % 5 != 0:
+		return
+	var foe := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "mob" and bool(e.alive):
+			foe = int(e.id)
+			break
+	if foe != 0 and sim.focus_id != foe:
+		sim.submit("focus", {"id": foe})
+	if sim.lowest_angel_hp_pct() < 90:
+		sim.submit("ability", {"name": "single_heal"})
+	if foe != 0:
+		sim.submit("ability", {"name": "taunt"})
+		sim.submit("ability", {"name": "strike"})
+		sim.submit("ability", {"name": "shield_wall"})
+		sim.submit("ability", {"name": "sunstrike"})
 
 
 func _assert_priced(owner: String, ability: String) -> void:
@@ -2724,8 +3027,8 @@ func test_human_policy_can_win() -> void:
 	var total_s := float(sim.tick) / 20.0
 	var crawl_s := float(lucifer_tick) / 20.0 if lucifer_tick >= 0 else -1.0
 	var boss_s := total_s - crawl_s if lucifer_tick >= 0 else -1.0
-	print("  human crawl=%0.1fs boss=%0.1fs total=%0.1fs outcome=%s seal=%s font=%s altar=%s" % [
-		crawl_s, boss_s, total_s, sim.outcome, sim.seal_done, sim.font_done, sim.altar_done
+	print("  human crawl=%0.1fs boss=%0.1fs total=%0.1fs outcome=%s casts=%d seal=%s font=%s altar=%s" % [
+		crawl_s, boss_s, total_s, sim.outcome, sim.ability_casts, sim.seal_done, sim.font_done, sim.altar_done
 	])
 	if sim.outcome != "angels":
 		fail("a slower player did not win: %s" % sim.debug_string())
@@ -3079,7 +3382,7 @@ func test_guide_arrow_and_persistent_prompt() -> void:
 
 func test_opening_grace_before_the_player_acts() -> void:
 	var sim := CombatSim.new()
-	if sim.golden != 6500 or sim.dark != Balance.DARK_START:
+	if sim.golden != Balance.GOLDEN_START or sim.dark != Balance.DARK_START:
 		fail("banks golden %d dark %d" % [sim.golden, sim.dark])
 		return
 	var dark0 := sim.dark

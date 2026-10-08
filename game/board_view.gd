@@ -44,6 +44,20 @@ const TELL_LABEL := {
 	"transform": "TRANSFORMS",
 }
 
+const STATUS_COLOR := {
+	"silence": Color(0.55, 0.78, 1.0),
+	"rot": Color(0.62, 0.95, 0.38),
+	"mark": Color(1.0, 0.38, 0.38),
+	"weaken": Color(0.84, 0.62, 1.0),
+	"shield": Color(0.45, 0.9, 1.0),
+	"radiance": Color(1.0, 0.86, 0.32),
+	"taunt": Color(1.0, 0.55, 0.28),
+	"wall": Color(0.7, 0.86, 1.0),
+	"block": Color(1.0, 0.68, 0.4),
+	"phalanx": Color(0.9, 0.94, 1.0),
+	"safe": Color(0.7, 0.95, 0.82),
+}
+
 const HINT_COLOR := {
 	"Still air": Color(0.95, 0.72, 0.22),
 	"Skittering": Color(0.95, 0.32, 0.24),
@@ -691,6 +705,40 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 		draw_string(font, p + Vector2(-4, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.05, 0.04, 0.08))
 	if foe and bool(u.get("spawning", false)) and font:
 		_plaque(font, p + Vector2(-22, 24), "ECHO", TELL_COLOR.echo, Color(0.1, 0.05, 0.02, 0.9), 12)
+	_draw_statuses(u, font, p, radius)
+
+
+## Screen-space pills. Read from the snapshot only.
+func _draw_statuses(u: Dictionary, font, anchor: Vector2, radius: float) -> void:
+	if font == null:
+		return
+	var rows: Array = u.get("statuses", [])
+	if rows.is_empty():
+		return
+	var y := anchor.y - radius - 14.0
+	for st in rows:
+		if typeof(st) != TYPE_DICTIONARY:
+			continue
+		var text := _status_text(st)
+		var col: Color = STATUS_COLOR.get(str(st.get("id", "")), Color(0.95, 0.92, 0.86))
+		y -= 16.0
+		var bg := Color(0.05, 0.04, 0.08, 0.92)
+		if str(st.get("polarity", "")) == "debuff":
+			bg = Color(0.16, 0.04, 0.06, 0.94)
+		_plaque(font, Vector2(anchor.x - 16.0, y), text, col, bg, 13)
+
+
+func _status_text(st: Dictionary) -> String:
+	var label := str(st.get("label", ""))
+	var left := int(st.get("left", 0))
+	var stacks := int(st.get("stacks", 0))
+	var id := str(st.get("id", ""))
+	if left > 0:
+		var secs := maxi(1, (left + 19) / 20)
+		return "%s %ds" % [label, secs]
+	if stacks > 0 and id in ["shield", "radiance", "phalanx"]:
+		return "%s %d" % [label, stacks]
+	return label
 
 
 func _room_color(kind: String, here: bool) -> Color:

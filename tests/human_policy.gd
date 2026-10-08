@@ -9,5 +9,6 @@ func _init() -> void:
 	react_remain = 24
 	heal_below = 64
 	burst_at = 6000
+	burst_loose_at = 4500
 	burst_loose = true
 	pre_shield = false
