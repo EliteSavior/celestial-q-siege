@@ -8,4 +8,4 @@ func _ready() -> void:
 	var game := GameRoot.new()
 	game.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(game)
-	print("Celestial Q Siege combat lab v%s" % ProjectSettings.get_setting("application/config/version"))
+	print("Celestial Q Siege v%s" % ProjectSettings.get_setting("application/config/version"))

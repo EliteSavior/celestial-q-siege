@@ -4,9 +4,11 @@ class_name GameRoot
 
 const BoardScript = preload("res://game/board_view.gd")
 const HudScript = preload("res://game/hud.gd")
+const FeelScript = preload("res://game/feel.gd")
 
 var sim: CombatSim
 var board
+var juice
 var hud: Control
 var acc := 0.0
 var speed := 1.0
@@ -31,6 +33,12 @@ func boot() -> void:
 	board.game = self
 	board.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(board)
+	juice = FeelScript.new()
+	juice.game = self
+	juice.set_anchors_preset(Control.PRESET_FULL_RECT)
+	juice.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(juice)
+	juice.setup()
 	hud = HudScript.new()
 	hud.game = self
 	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -50,6 +58,8 @@ func _process(delta: float) -> void:
 			steps += 1
 	var snap := sim.build_snapshot()
 	board.snap = snap
+	if juice:
+		juice.follow(snap)
 	hud.refresh(snap)
 
 
@@ -80,17 +90,30 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func command(type: String, args: Dictionary = {}) -> void:
-	if sim == null or sim.outcome != "":
+	if sim == null or briefing or sim.outcome != "":
 		return
 	sim.submit(type, args, "angel", 1)
 
 
 func restart() -> void:
+	_reset_run(false)
+
+
+func title() -> void:
+	_reset_run(true)
+
+
+func _reset_run(to_title: bool) -> void:
 	sim.reset()
 	acc = 0.0
 	paused = false
-	briefing = false
-	board.cam_ready = false
+	briefing = to_title
+	if board:
+		board.cam_ready = false
+	if juice:
+		juice.reset()
+	if hud and hud.has_method("on_new_run"):
+		hud.on_new_run(to_title)
 
 
 func _key(code: Key) -> void:

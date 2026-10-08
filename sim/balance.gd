@@ -5,7 +5,10 @@ extends RefCounted
 const TICK_HZ := 20
 const MILLI := 1000
 const ELIXIR_MAX := 10000
-const GOLDEN_START := 4500
+# Opening Golden covers Shield (3) and a Heal (1.5) and still leaves half a point,
+# so the first fight is a choice. Regen itself is unchanged: the crawl's length
+# is the road, and speeding the curve would pull a competent run under 8 minutes.
+const GOLDEN_START := 5000
 const DARK_START := 4200
 
 # Milli-elixir per tick. Index is the stage reached (0 descent … 3 approach).
