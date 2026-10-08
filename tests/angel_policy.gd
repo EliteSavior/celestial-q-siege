@@ -56,6 +56,15 @@ func _defense(sim) -> void:
 			sim.submit("shield", {})
 		if name == "judgment" and remain <= 18:
 			sim.submit("phalanx", {})
+	for commit in sim._visible_commitments():
+		var plan := str(commit.get("plan", ""))
+		var remain: int = int(commit.get("land", 0)) - int(sim.tick)
+		if plan == "elite" and remain <= 70:
+			sim.submit("ability", {"name": "taunt"})
+			sim.submit("phalanx", {})
+		elif plan == "trap_cluster":
+			sim.submit("detect", {})
+			sim.submit("ability", {"name": "shield_wall"})
 	if _elite_blinking(sim):
 		sim.submit("ability", {"name": "taunt"})
 		sim.submit("phalanx", {})
@@ -215,6 +224,9 @@ func _debuffed(sim) -> bool:
 func _elite_blinking(sim) -> bool:
 	for id in sim.order:
 		var e: Dictionary = sim.entities[id]
-		if str(e.subtype) == "elite" and e.alive and e.blink is Dictionary and not e.blink.is_empty():
+		if str(e.get("subtype", "")) != "elite" or not bool(e.get("alive", false)):
+			continue
+		var blink = e.get("blink", {})
+		if blink is Dictionary and not blink.is_empty():
 			return true
 	return false

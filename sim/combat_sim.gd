@@ -251,6 +251,7 @@ func tick_once() -> void:
 	_channels()
 	_zones_and_auras()
 	_curses_land()
+	_commitments_land()
 	_lucifer()
 	_stakes()
 	_turtle()
@@ -311,6 +312,8 @@ func _exec(c: Dictionary) -> void:
 			_cmd_curse(args)
 		"descend":
 			_cmd_descend(bool(args.get("early", false)))
+		"commit":
+			_cmd_commit(args)
 		_:
 			_fail("Unknown command.")
 
@@ -786,10 +789,13 @@ func _cmd_spawn(args: Dictionary) -> void:
 	var unit := str(args.get("unit", ""))
 	var node := str(args.get("node", ""))
 	var echo := bool(args.get("echo", false))
-	var reason := "" if echo else legal_spawn(unit, node)
+	var paid := bool(args.get("paid", false))
+	var reason := "" if echo or paid else legal_spawn(unit, node)
 	if reason != "":
 		return
-	if not echo:
+	if paid and map.node_tile(node).x < 0:
+		return
+	if not echo and not paid:
 		dark -= Balance.summon_cost(unit)
 		spawns_placed += 1
 	var pos := Fixed.tile_center(map.node_tile(node))
@@ -815,10 +821,15 @@ func _cmd_trap(args: Dictionary) -> void:
 		return
 	var kind := str(args.get("kind", ""))
 	var node := str(args.get("node", ""))
-	if legal_trap(kind, node) != "":
+	var paid := bool(args.get("paid", false))
+	if paid:
+		if map.node_tile(node).x < 0 or node_occupied_by_trap(node):
+			return
+	elif legal_trap(kind, node) != "":
 		return
-	dark -= Balance.trap_cost(kind)
-	traps_placed += 1
+	if not paid:
+		dark -= Balance.trap_cost(kind)
+		traps_placed += 1
 	var pos := Fixed.tile_center(map.node_tile(node))
 	var id := _alloc()
 	entities[id] = {
@@ -832,7 +843,7 @@ func _cmd_trap(args: Dictionary) -> void:
 		"hp_max": 1,
 		"alive": true,
 		"armed": true,
-		"revealed": false,
+		"revealed": paid,
 		"node": node,
 		"room": node.split(":")[0],
 		"avoided": false,
@@ -872,6 +883,66 @@ func _cmd_curse(args: Dictionary) -> void:
 	order.append(id)
 	order.sort()
 	_log("%s gathers on %s." % [kind.capitalize(), tgt.name], "bad")
+
+
+func _cmd_commit(args: Dictionary) -> void:
+	if phase != "dungeon":
+		return
+	var why := legal_commit(args)
+	if why != "":
+		return
+	var plan := str(args.get("plan", ""))
+	var pieces: Array = []
+	var node := str(args.get("node", ""))
+	var cost := 0
+	if plan == "elite":
+		cost = Balance.summon_cost("elite")
+		dark -= cost
+		spawns_placed += 1
+		pieces = []
+	else:
+		pieces = args.get("pieces", [])
+		for p in pieces:
+			var piece_cost := Balance.trap_cost(str(p.get("kind", "")))
+			cost += piece_cost
+			traps_placed += 1
+			if node == "":
+				node = str(p.get("node", ""))
+		dark -= cost
+	if dark < 0:
+		dark = 0
+	var room := node.split(":")[0]
+	var pos := Fixed.tile_center(map.node_tile(node))
+	var id := _alloc()
+	var stored: Array = []
+	for p2 in pieces:
+		stored.append({"kind": str(p2.get("kind", "")), "node": str(p2.get("node", ""))})
+	entities[id] = {
+		"id": id,
+		"team": "demon",
+		"kind": "commitment",
+		"subtype": plan,
+		"name": plan,
+		"pos": pos,
+		"hp": 1,
+		"hp_max": 1,
+		"alive": true,
+		"plan": plan,
+		"node": node,
+		"room": room,
+		"pieces": stored,
+		"land": tick + Balance.COMMIT_CAST,
+		"landed": false,
+	}
+	order.append(id)
+	order.sort()
+	if tick >= banner_until:
+		banner = "Elite committing" if plan == "elite" else "Trap cluster"
+		banner_until = tick + Balance.COMMIT_CAST
+	if plan == "elite":
+		_log("The demon commits an elite — Teleporter, Molten.", "bad")
+	else:
+		_log("A trap cluster is being laid.", "bad")
 
 
 func _cmd_descend(early: bool) -> void:
@@ -939,6 +1010,9 @@ func legal_trap(kind: String, node: String) -> String:
 		return "echo"
 	if Balance.trap_cost(kind) > dark:
 		return "dark"
+	var room := node.split(":")[0]
+	if traps_in_room(room) >= Balance.TRAP_CAP_PER_ROOM:
+		return "room"
 	if _armed_trap_count() >= trap_cap:
 		return "cap"
 	var tile := map.node_tile(node)
@@ -946,7 +1020,6 @@ func legal_trap(kind: String, node: String) -> String:
 		return "node"
 	if node_occupied_by_trap(node):
 		return "occupied"
-	var room := node.split(":")[0]
 	if room == party_room_id:
 		return "too close"
 	var pos := Fixed.tile_center(tile)
@@ -977,12 +1050,99 @@ func legal_curse(kind: String, target_name: String) -> String:
 		return "echo"
 	if Balance.curse_cost(kind) > dark:
 		return "dark"
-	if curse_pending_or_active():
+	if _curse_casting() or _command_pending("curse"):
 		return "busy"
 	var hero := _hero(target_name)
 	if hero.is_empty() or not hero.alive:
 		return "target"
 	return ""
+
+
+func legal_commit(args: Dictionary) -> String:
+	if phase != "dungeon":
+		return "echo"
+	if commitment_open() or _command_pending("commit"):
+		return "busy"
+	var plan := str(args.get("plan", ""))
+	if plan == "elite":
+		return legal_spawn("elite", str(args.get("node", "")))
+	if plan != "trap_cluster":
+		return "plan"
+	var pieces: Array = args.get("pieces", [])
+	if pieces.size() < 2:
+		return "plan"
+	var cost := 0
+	var room := ""
+	var seen := {}
+	for p in pieces:
+		var kind := str(p.get("kind", ""))
+		var node := str(p.get("node", ""))
+		if seen.has(node):
+			return "occupied"
+		seen[node] = true
+		var why := legal_trap(kind, node)
+		if why == "dark":
+			pass
+		elif why != "":
+			return why
+		var piece_room := node.split(":")[0]
+		if room == "":
+			room = piece_room
+		elif room != piece_room:
+			return "room"
+		cost += Balance.trap_cost(kind)
+	if traps_in_room(room) + pieces.size() > Balance.TRAP_CAP_PER_ROOM:
+		return "room"
+	if _armed_trap_count() + pieces.size() > trap_cap:
+		return "cap"
+	if cost > dark:
+		return "dark"
+	return ""
+
+
+func can_read(room: String) -> bool:
+	if room == "" or room == party_room_id:
+		return room != ""
+	var info = map.by_id.get(party_room_id, {})
+	if info.is_empty():
+		return false
+	if info.neighbors.has(room):
+		return true
+	for n in info.neighbors:
+		var other = map.by_id.get(str(n), {})
+		if not other.is_empty() and other.neighbors.has(room):
+			return true
+	return false
+
+
+func traps_in_room(room: String) -> int:
+	var n := 0
+	for id in order:
+		var e: Dictionary = entities[id]
+		if str(e.kind) == "trap" and bool(e.get("armed", false)) and str(e.get("room", "")) == room:
+			n += 1
+		if _commitment_pending(e) and str(e.get("plan", "")) == "trap_cluster":
+			for p in e.get("pieces", []):
+				if str(p.get("node", "")).begins_with(room + ":"):
+					n += 1
+	return n
+
+
+func commitment_open(plan: String = "") -> bool:
+	for id in order:
+		var e: Dictionary = entities[id]
+		if not _commitment_pending(e):
+			continue
+		if plan == "" or str(e.get("plan", "")) == plan:
+			return true
+	if plan == "":
+		return _command_pending("commit")
+	for c in queue:
+		if str(c.type) != "commit":
+			continue
+		if str(c.args.get("plan", "")) == plan:
+			return true
+	return false
 
 
 func node_occupied_by_trap(node: String) -> bool:
@@ -1908,6 +2068,48 @@ func elite_hp_pct() -> int:
 	return 0
 
 
+func _commitment_pending(e: Dictionary) -> bool:
+	return str(e.get("kind", "")) == "commitment" and bool(e.get("alive", false)) and not bool(e.get("landed", false))
+
+
+func _curse_casting() -> bool:
+	for id in order:
+		var e: Dictionary = entities[id]
+		if str(e.kind) == "curse" and not bool(e.get("landed", false)):
+			return true
+	return false
+
+
+func _command_pending(type: String) -> bool:
+	for c in queue:
+		if str(c.type) == type:
+			return true
+	return false
+
+
+func _commitments_land() -> void:
+	for id in order.duplicate():
+		var e: Dictionary = entities[id]
+		if not _commitment_pending(e):
+			continue
+		if tick < int(e.land):
+			continue
+		e.landed = true
+		e.alive = false
+		if phase != "dungeon":
+			continue
+		var plan := str(e.plan)
+		if plan == "elite":
+			_cmd_spawn({"unit": "elite", "node": str(e.node), "paid": true})
+		elif plan == "trap_cluster":
+			for p in e.pieces:
+				_cmd_trap({
+					"kind": str(p.get("kind", "")),
+					"node": str(p.get("node", "")),
+					"paid": true,
+				})
+
+
 func curse_pending_or_active() -> bool:
 	for id in order:
 		var e: Dictionary = entities[id]
@@ -2073,6 +2275,7 @@ func build_snapshot() -> Dictionary:
 		"traps": traps,
 		"zones": zones,
 		"curses": curses,
+		"commitments": _visible_commitments(),
 		"exits": exits,
 		"heroes": hero_state,
 		"kits": _KIT.duplicate(true),
@@ -2644,9 +2847,59 @@ func _armed_trap_count() -> int:
 	var n := 0
 	for id in order:
 		var e: Dictionary = entities[id]
-		if str(e.kind) == "trap" and bool(e.get("armed", false)):
+		if str(e.kind) == "trap" and bool(e.get("armed", false)) and _trap_counts_for_cap(str(e.get("room", ""))):
 			n += 1
+		if _commitment_pending(e) and str(e.get("plan", "")) == "trap_cluster":
+			for p in e.get("pieces", []):
+				var room := str(p.get("node", "")).split(":")[0]
+				if _trap_counts_for_cap(room):
+					n += 1
 	return n
+
+
+func _trap_counts_for_cap(room: String) -> bool:
+	if room == "":
+		return true
+	# Corridors are never "cleared", so a trap the party already walked
+	# past would otherwise sit on the global cap for the rest of the stage
+	# and the director could not lay the next one ahead.
+	if room != party_room_id and bool(visited.get(room, false)):
+		return false
+	if bool(cleared.get(room, false)) and room != party_room_id:
+		return false
+	var info = map.by_id.get(room, {})
+	if info.is_empty():
+		return true
+	if int(info.get("stage", 0)) < stage_reached:
+		return false
+	return true
+
+
+func _visible_commitments() -> Array:
+	var list: Array = []
+	for id in order:
+		var e: Dictionary = entities[id]
+		if not _commitment_pending(e):
+			continue
+		if not can_read(str(e.get("room", ""))):
+			continue
+		var pieces: Array = []
+		for p in e.get("pieces", []):
+			var node := str(p.get("node", ""))
+			pieces.append({
+				"kind": str(p.get("kind", "")),
+				"node": node,
+				"pos": Fixed.tile_center(map.node_tile(node)),
+			})
+		list.append({
+			"plan": str(e.plan),
+			"room": str(e.room),
+			"node": str(e.node),
+			"pos": e.pos,
+			"land": int(e.land),
+			"pieces": pieces,
+		})
+	return list
 
 
 func _hostiles_in_room(room: String) -> int:

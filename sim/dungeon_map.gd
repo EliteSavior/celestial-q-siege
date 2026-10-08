@@ -189,20 +189,78 @@ func _join(a: String, b: String) -> void:
 
 
 func _place_nodes() -> void:
+	var tiles_by_room := {}
+	var w := width
+	for i in room_of.size():
+		var ri := int(room_of[i])
+		if ri < 0:
+			continue
+		if not tiles_by_room.has(ri):
+			tiles_by_room[ri] = []
+		tiles_by_room[ri].append(Vector2i(i % w, int(i / w)))
 	for room in rooms:
 		if room.corridor:
+			_corridor_nodes(str(room.id), tiles_by_room.get(_room_index(str(room.id)), []))
 			continue
 		var rect: Rect2i = room.rect
 		var x0 := rect.position.x
 		var y0 := rect.position.y
-		var w := rect.size.x
-		var h := rect.size.y
+		var rw := rect.size.x
+		var rh := rect.size.y
 		_nodes(room.id, {
-			"choke": Vector2i(x0 + 2, y0 + h / 2),
-			"center": Vector2i(x0 + w / 2, y0 + h / 2),
-			"flank": Vector2i(x0 + w / 2, y0 + 2),
-			"rear": Vector2i(x0 + w - 3, y0 + h / 2),
+			"choke": Vector2i(x0 + 2, y0 + rh / 2),
+			"center": Vector2i(x0 + rw / 2, y0 + rh / 2),
+			"flank": Vector2i(x0 + rw / 2, y0 + 2),
+			"rear": Vector2i(x0 + rw - 3, y0 + rh / 2),
 		})
+
+
+func _corridor_nodes(id: String, tiles: Array) -> void:
+	if tiles.is_empty():
+		return
+	var min_x := 999999
+	var max_x := -1
+	var min_y := 999999
+	var max_y := -1
+	for t in tiles:
+		var tv: Vector2i = t
+		min_x = mini(min_x, tv.x)
+		max_x = maxi(max_x, tv.x)
+		min_y = mini(min_y, tv.y)
+		max_y = maxi(max_y, tv.y)
+	var horizontal := (max_x - min_x) >= (max_y - min_y)
+	var columns := {}
+	for t2 in tiles:
+		var tv2: Vector2i = t2
+		var key := tv2.x if horizontal else tv2.y
+		if not columns.has(key):
+			columns[key] = []
+		columns[key].append(tv2)
+	var keys: Array = columns.keys()
+	keys.sort()
+	if keys.is_empty():
+		return
+	var i1: int = keys.size() / 3
+	var i2: int = mini(keys.size() - 1, keys.size() * 2 / 3)
+	var nodes := {
+		"center": _median_tile(columns[keys[i2]], horizontal),
+	}
+	if keys.size() >= 3 and i1 != i2:
+		nodes["choke"] = _median_tile(columns[keys[i1]], horizontal)
+	_nodes(id, nodes)
+
+
+func _median_tile(list: Array, horizontal: bool) -> Vector2i:
+	list.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		if horizontal:
+			if a.y != b.y:
+				return a.y < b.y
+			return a.x < b.x
+		if a.x != b.x:
+			return a.x < b.x
+		return a.y < b.y
+	)
+	return list[list.size() / 2]
 
 
 func _nodes(id: String, nodes: Dictionary) -> void:
@@ -335,6 +393,12 @@ func validate() -> Array:
 	var errors: Array = []
 	for room in rooms:
 		if room.corridor:
+			if room.nodes.is_empty():
+				errors.append("corridor %s has no anchor" % room.id)
+			for n in room.nodes.keys():
+				var ct: Vector2i = room.nodes[n]
+				if id_at_tile(ct) != room.id:
+					errors.append("node %s:%s not in room (%s)" % [room.id, n, ct])
 			continue
 		var center := center_tile(room.id)
 		if id_at_tile(center) != room.id:
