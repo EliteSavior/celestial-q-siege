@@ -111,10 +111,13 @@ func handle_tap(screen: Vector2) -> void:
 	if bool(snap.get("beam_on", false)):
 		game.command("steer", {"pos": milli})
 		return
-	for foe in snap.foes:
-		if Fixed.dist(milli, foe.pos) <= 900:
-			game.command("focus", {"id": int(foe.id)})
-			return
+	var picked := _pick_touch(milli)
+	if not picked.is_empty():
+		if str(picked.kind) == "angel":
+			game.command("ally", {"target": str(picked.subtype)})
+		else:
+			game.command("focus", {"id": int(picked.id)})
+		return
 	var stake_id := str(snap.get("stake_id", ""))
 	if stake_id != "":
 		var stake_node: Vector2i = game.sim.map.node_tile("%s:rear" % stake_id)
@@ -172,6 +175,28 @@ func handle_drag(screen: Vector2) -> void:
 
 
 const SNAP_RADIUS := 16
+
+
+## Nearest living foe or hero under a tap. Foes win an exact tie so a mob
+## standing on a hero still focuses. Radius matches the 1.0.2 foe tap.
+func _pick_touch(milli: Vector2i) -> Dictionary:
+	var best_d := 901
+	var best := {}
+	for foe in snap.foes:
+		if not bool(foe.get("alive", false)):
+			continue
+		var d := Fixed.dist(milli, foe.pos)
+		if d < best_d:
+			best_d = d
+			best = {"kind": "foe", "id": int(foe.id), "subtype": str(foe.subtype)}
+	for angel in snap.angels:
+		if not bool(angel.get("alive", false)):
+			continue
+		var d2 := Fixed.dist(milli, angel.pos)
+		if d2 < best_d:
+			best_d = d2
+			best = {"kind": "angel", "id": int(angel.id), "subtype": str(angel.subtype)}
+	return best
 
 
 func _nearest_walkable(milli: Vector2i) -> Vector2i:
@@ -893,6 +918,11 @@ func _draw_actors(font) -> void:
 			_draw_trap_actor(u, font)
 		elif str(actor.kind) == "foe":
 			_draw_unit(u, _foe_color(str(u.subtype)), font, true)
+			var aim := str(u.get("target", ""))
+			if aim != "" and bool(u.get("pulled", false)):
+				var who := _hero_pos(aim)
+				if who != Vector2i.ZERO:
+					draw_line(_milli_screen(u.pos), _milli_screen(who), Color(0.95, 0.35, 0.28, 0.45), 2.0)
 			var blink = u.get("blink", {})
 			if blink is Dictionary and not blink.is_empty():
 				draw_line(_milli_screen(u.pos), _milli_screen(blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
@@ -910,6 +940,8 @@ func _draw_actors(font) -> void:
 			var col: Color = HERO_COLOR.get(str(u.subtype), Color.WHITE)
 			if int(u.id) == int(snap.focus_id):
 				draw_circle(_milli_screen(u.pos), 22, Color(1, 1, 1, 0.15))
+			if str(snap.get("ally_target", "")) == str(u.subtype):
+				draw_arc(_milli_screen(u.pos), 18.0, 0, TAU, 20, Color(0.45, 0.95, 0.55, 0.95), 2.0)
 			_draw_unit(u, col, font, false)
 
 

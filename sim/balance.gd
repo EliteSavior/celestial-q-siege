@@ -91,6 +91,19 @@ const TRAP_MIN_DIST := 4000
 
 const TAUNT_RADIUS := 3200
 const TAUNT_TICKS := 80
+# While taunt lasts, Michael's effective threat on that mob is one above
+# the current highest. The bonus is not written into the table, so it ends
+# with the taunt and a higher real threat can hold the mob again.
+const TAUNT_SNAP := 1
+# Mobs hold their spawn until a living angel walks into this radius, shares
+# their room (corridors do not count — a march is not a pull), or damages them.
+const AGGRO_RANGE := 4200
+const LEASH_RANGE := 9800
+# Damage dealt is threat. Michael's hits are multiplied so auto-attacks hold
+# a pack; a DPS elixir hit can still pass him. Heals add this percent of the
+# amount healed, split across mobs that are already in the fight.
+const TANK_THREAT_MULT := 400
+const HEAL_THREAT_PCT := 50
 const SHIELD_WALL_TICKS := 60
 const BODY_BLOCK_TICKS := 80
 # Michael keeps this percent of incoming damage. Highest HP is on the hero row.
@@ -102,6 +115,12 @@ const REVIVE_PCT := 40
 const REVIVE_INTERRUPT := 14
 const REVIVE_REFUND := 3000
 const BURST_DMG := 74
+# Azrael's elixir strike. Melee, single target, heavier than Burst.
+const STRIKE_DMG := 108
+# Uriel's elixir nuke. Ranged primary hit plus a small splash around that foe.
+const SUNSTRIKE_DMG := 86
+const SUNSTRIKE_SPLASH := 40
+const SUNSTRIKE_RADIUS := 1000
 const DASH_TICKS := 30
 const DASH_DISTANCE := 2400
 const BEAM_TICKS := 24
@@ -149,6 +168,27 @@ const ALTAR_REVIVE_DELAY := 20
 # them; when the window closes the death is final.
 const DOWNED_TICKS := 60
 
+# Mob bodies. 1.0.2 values, for the balance note:
+#   imp 34 HP / atk 6 / period 18, heavy 260 / 13 / 18, elite 420 / 12 / 20.
+# A focused party killed an imp in under a second. These HP totals are a
+# sustained exchange: several seconds on an imp, longer on a heavy and an elite.
+# Attacks came down slightly so the extra time stays survivable.
+const IMP_HP := 240
+const IMP_ATK := 5
+const IMP_PERIOD := 18
+const IMP_RANGE := 1100
+const IMP_SPEED := 140
+const HEAVY_HP := 480
+const HEAVY_ATK := 10
+const HEAVY_PERIOD := 20
+const HEAVY_RANGE := 1200
+const HEAVY_SPEED := 78
+const ELITE_HP := 1080
+const ELITE_ATK := 11
+const ELITE_PERIOD := 20
+const ELITE_RANGE := 1300
+const ELITE_SPEED := 88
+
 # The crawl is the siege. Lucifer is the climax, not most of the clock:
 # a healthy party burns this down in about two minutes of telegraphs.
 const LUCIFER_HP := 3700
@@ -169,8 +209,12 @@ static func cost(ability: String) -> int:
 			return 2000
 		"single_heal", "cleanse":
 			return 1500
+		"strike":
+			return 2500
 		"shield_wall", "burst", "beam":
 			return 3000
+		"sunstrike":
+			return 3500
 		"party_heal", "aoe_zone":
 			return 4000
 		"slow_revive":
@@ -201,6 +245,10 @@ static func cooldown(ability: String) -> int:
 			return 400
 		"burst", "cleanse":
 			return 100
+		"strike":
+			return 100
+		"sunstrike":
+			return 140
 		"disarm":
 			return 70
 		"beam":
@@ -257,9 +305,9 @@ static func owner_of(ability: String) -> String:
 			return "michael"
 		"single_heal", "party_heal", "slow_revive":
 			return "raphael"
-		"burst", "disarm", "escape_dash", "detect_pulse":
+		"burst", "disarm", "escape_dash", "detect_pulse", "strike":
 			return "azrael"
-		"beam", "aoe_zone", "disengage":
+		"beam", "aoe_zone", "disengage", "sunstrike":
 			return "uriel"
 		"cleanse", "self_shield", "emergency_res":
 			return "gabriel"
@@ -283,6 +331,10 @@ static func ability_label(ability: String) -> String:
 			return "Revive"
 		"burst":
 			return "Burst"
+		"strike":
+			return "Strike"
+		"sunstrike":
+			return "Sunstrike"
 		"disarm":
 			return "Disarm"
 		"escape_dash":
