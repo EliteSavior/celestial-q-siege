@@ -136,6 +136,26 @@ func _draw() -> void:
 	for zone in snap.zones:
 		var colz := Color(0.95, 0.35, 0.12, 0.28) if str(zone.subtype) == "hell" else Color(0.95, 0.85, 0.4, 0.28)
 		draw_circle(_milli_screen(zone.pos), float(zone.radius) / 1000.0 * TILE, colz)
+	for commit in snap.get("commitments", []):
+		var cp := _milli_screen(commit.pos)
+		var total := maxi(Balance.COMMIT_CAST, 1)
+		var remain_c := maxi(0, int(commit.land) - int(snap.tick))
+		var frac_c := 1.0 - float(remain_c) / float(total)
+		draw_arc(cp, 22.0, -PI * 0.5, -PI * 0.5 + TAU * frac_c, 24, Color(0.95, 0.35, 0.55), 3.0)
+		draw_circle(cp, 8.0, Color(0.9, 0.2, 0.35, 0.35))
+		if font:
+			var label := "elite" if str(commit.plan) == "elite" else "trap cluster"
+			draw_string(font, cp + Vector2(-36, -28), "%s %0.1fs" % [label, float(remain_c) / 20.0], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1.0, 0.55, 0.7))
+		for piece in commit.get("pieces", []):
+			draw_circle(_milli_screen(piece.pos), 6.0, Color(0.95, 0.45, 0.2, 0.45))
+	for curse in snap.get("curses", []):
+		var cpos := _milli_screen(curse.pos)
+		var crest := maxi(0, int(curse.land) - int(snap.tick))
+		var span := Balance.CURSE_CAST_MARK if str(curse.subtype) == "mark" else Balance.CURSE_CAST
+		var cfrac := 1.0 - float(crest) / float(maxi(span, 1))
+		draw_arc(cpos, 26.0, -PI * 0.5, -PI * 0.5 + TAU * cfrac, 20, Color(0.72, 0.45, 0.95), 3.0)
+		if font:
+			draw_string(font, cpos + Vector2(-28, 34), "%s %0.1fs" % [str(curse.subtype), float(crest) / 20.0], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.86, 0.7, 1.0))
 	for trap in snap.traps:
 		var c3 := _milli_screen(trap.pos)
 		var tc := Color(0.95, 0.55, 0.15) if str(trap.subtype) == "hellflame" else Color(0.85, 0.8, 0.45)
@@ -148,9 +168,10 @@ func _draw() -> void:
 	_draw_telegraphs(font)
 	for foe in snap.foes:
 		_draw_unit(foe, _foe_color(str(foe.subtype)), font, true)
-		if foe.blink is Dictionary and not foe.blink.is_empty():
-			draw_line(_milli_screen(foe.pos), _milli_screen(foe.blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
-			draw_circle(_milli_screen(foe.blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
+		var blink = foe.get("blink", {})
+		if blink is Dictionary and not blink.is_empty():
+			draw_line(_milli_screen(foe.pos), _milli_screen(blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
+			draw_circle(_milli_screen(blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
 	for angel in snap.angels:
 		if not bool(angel.alive):
 			var fallen := Color(0.25, 0.25, 0.28)

@@ -61,7 +61,13 @@ const SPIKE_STEP := 450
 const TIGHT_SPIKE := 950
 
 const TRAP_CAP := 4
+const TRAP_CAP_PER_ROOM := 2
 const ECHO_TRAP_CAP := 2
+# A committed elite or trap cluster is readable for 3 seconds before it arms.
+const COMMIT_CAST := 60
+# March ceilings by stage. Overflow above the line is spent, so a long
+# corridor cannot sit on the cap and mint the same finale every time.
+const MARCH_BANK: Array[int] = [8800, 7600, 6400, 4800]
 const MOB_CAP := 6
 const TRAP_MIN_DIST := 4000
 

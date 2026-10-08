@@ -100,6 +100,12 @@ func refresh(snap: Dictionary) -> void:
 		"" if lock == "" else "   committed: " + lock,
 		marks,
 	]
+	var commits: Array = snap.get("commitments", [])
+	if not commits.is_empty():
+		var c0: Dictionary = commits[0]
+		var left := maxi(0, int(c0.get("land", 0)) - int(snap.tick))
+		var plan := "elite" if str(c0.get("plan", "")) == "elite" else "trap cluster"
+		_room.text += "   %s %0.1fs" % [plan, float(left) / 20.0]
 	if bool(snap.corruption):
 		_room.text += "   CORRUPTION"
 	elif bool(snap.corruption_warn):
@@ -230,7 +236,7 @@ func _build_brief() -> void:
 	_brief.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_brief)
 	var l := Label.new()
-	l.text = "Celestial Q Siege\n\nFive angels, one squad. Each portrait is that angel's health. Tap the ground to move, a doorway to commit for 3 seconds, an enemy to focus.\n\nAttacks happen on their own. The five buttons spend Golden Elixir and route to the angel who owns them: Shield, Heal, Cleanse, Detect, Burst.\nTap a portrait for that angel's three actives. Drag while Uriel's beam is up to steer it.\nA downed angel has 3 seconds before the death is final. Heal, an emergency rite, or an altar charge can still reach them.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column. Scatter Roll and Phalanx Push are the reactions.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
+	l.text = "Celestial Q Siege\n\nFive angels, one squad. Each portrait is that angel's health. Tap the ground to move, a doorway to commit for 3 seconds, an enemy to focus.\n\nAttacks happen on their own. The five buttons spend Golden Elixir and route to the angel who owns them: Shield, Heal, Cleanse, Detect, Burst.\nTap a portrait for that angel's three actives. Drag while Uriel's beam is up to steer it.\nA downed angel has 3 seconds before the death is final. Heal, an emergency rite, or an altar charge can still reach them.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column. Scatter Roll and Phalanx Push are the reactions.\n\nThe demon commits an elite or a trap cluster with a cast bar before it lands. Quiet traps stay hidden until Detect. Curses show their cast before they take hold.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
 	l.position = Vector2(180, 70)
 	l.size = Vector2(920, 460)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

@@ -4,7 +4,7 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M3 (the five hero kits) on the M2 combat core.** Per-angel health, auto-attack, and a 3-second downed window sit under five locked kits (3 actives + 1 passive). A lethal hit downs that angel; Raphael's slow revive, Gabriel's emergency resurrection, and the altar charge can still reach them until the window closes. Michael taunts one enemy, raises a shield wall, and body-blocks the next single hit. Raphael heals one ally, heals the party, and slow-casts a revive. Azrael bursts, disarms a revealed trap, and dashes out. Uriel channels a beam you drag to steer, drops a holy zone, and disengages the squad. Gabriel cleanses (Silence, then Rot, then Mark, then Weaken), shields himself, and emergency-revives. Passives: Michael's bulk, Raphael's regen while he is not casting, Azrael's detect aura, Uriel's Radiance stacks, Gabriel's damage aura. Twin elixir bars show the live banks and the stage regen. A scripted competent party still reaches the throne in about 8.0 minutes and wins in about 9.5. Placeholder shapes, not final art. No networking yet: every action, angel or demon, goes through `submit()`.
+> **Status: M4 (the AI Demon Lord) on the M3 kits.** The director spends Dark through the same `submit()` path a human demon will use. Priority is Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. On a march that is already over the line, that spend happens before the next punish, so a cooldown cannot refill the bank. Swarms are always available. Heavies unlock after 2 rooms cleared. The one elite (Teleporter and Molten) unlocks after 4, and committing it spends Dark immediately and shows a 3-second cast bar before the unit exists. Reinforcements go into the next room, not the one being fought. Spike, snare, and hellflame are laid ahead, two to a room, and stay hidden until Azrael's aura or Detect. A trap cluster is committed the same way as the elite. Silence, Rot, and Mark each show a cast bar before they land. On the current tune a scripted competent party reaches Lucifer at 499.4 seconds and wins at 597.4 seconds. That run's echo was one heavy and one imp, in the trap style, not the capped wave. Placeholder shapes, not final art. No networking yet.
 
 ---
 
@@ -30,7 +30,7 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 
 Combat is the sim, not the scene. Angels and demons auto-attack anything in range. Shield, Heal, Cleanse, Detect, and Burst are the only angel buttons; each one routes to the owner and spends Golden Elixir. There is no hand of cards. A lethal hit downs that angel for 3 seconds (the portrait and a ring on the board count it down). Emergency resurrection, Raphael's slow revive, or a banked altar charge can still reach them. When the window closes, the death is final and a full party of final deaths is a wipe. Golden comes from playing (a trap avoided, a cleanse, a kill), Dark from chipping angels, both capped per room. Neither bar drips extra to the side that is behind.
 
-Fog shows the current room and the next doorway. Traps stay hidden until Azrael's detect aura, a Detect pulse, or the lead angel steps on the tile. Curses show a cast bar before they land. Summons are visible when they spawn.
+Fog shows the current room and the next doorway. Traps stay hidden until Azrael's detect aura, a Detect pulse, or the lead angel steps on the tile. Curses show a cast bar before they land. Summons are visible when they spawn, including the short spawn-in. An elite or a trap cluster spends its Dark when the commit is issued and shows a cast bar for 3 seconds before it arms. The angels can read that bar from the doorway.
 
 The dungeon is three stages. Each fork reads the same way: **Still air** (traps), **Skittering** (a committed summon), **Whispers** (a committed curse). The east road is the short one; the other two are longer and reconverge. Between stages a held nave breaks the march.
 
@@ -63,7 +63,7 @@ godot --headless --path . --import
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 36 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, altar revive, the length of the road, and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at about 8.0 minutes and wins at about 9.5. The empty road, stakes included and no demon, is about 7.1 minutes and 1280 tiles.
+`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 44 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, altar revive, the length of the road, director decisions (rooms-gated tiers, reinforcing the next room, commitment and curse telegraphs, Dark spent on a march), and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at 499.4 seconds and wins at 597.4 seconds. The boss lasts 98.0 seconds. The empty road, stakes included and no demon, is 425.5 seconds and 1280 tiles.
 
 ---
 
@@ -85,7 +85,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `0.4.0` (versionCode `5`)
+- App name: `Celestial Q Siege`, version `0.5.0` (versionCode `6`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
@@ -118,12 +118,13 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Portrait inspect is view state. It does not change the sim.
 - Detect is a paid wide pulse, and the same button disarms a revealed trap in range.
 - The Dark bar is visible here so the solo lab is readable. A real 1v1 would hide it.
-- Pacing target is 8–12 minutes. The scripted party hits about 9.5: ~8.0 minutes of crawl, ~1.5 minutes of Lucifer. The marches are the long part; room fights add the rest.
-- The director still fills the Dark bank on the long marches, so the echo wave is often the capped one. Spending it down is future tuning.
+- Pacing target is 8–12 minutes. The scripted party hits 597.4 seconds: 499.4 seconds of crawl, 98.0 seconds of Lucifer. The marches are the long part; room fights add the rest.
+- The director spends Dark on the march (the next room, traps ahead, curses) down toward a per-stage line. The echo is whatever Dark is still banked when Lucifer descends, so a siege that spent on traps does not pay the capped wave. On this tune the healthy scripted run echoed one heavy and one imp, and the history was traps (65 placed, 10 summons, 27 curses).
+- Traps the party has already walked past do not keep occupying the global cap of 4. The live cap is the current room plus rooms not yet entered, and each room still holds at most 2.
 - The Gate Seal locks swarm summons. The Cleansing Font stores one auto-cleanse. The altar is still the revive.
 - Uriel's beam locks a target until you drag (or tap) to steer the line. An unsteered beam stays single-target.
 - Taunt pulls one mob (the focus, else whoever is on the backline), not the whole room. It also cancels that elite's blink.
-- Gabriel's cleanse order is Silence, Rot, Mark, then Weaken. Weaken is a debuff the cleanse understands; the MVP curses that land are still Silence, Rot, and Mark.
+- Gabriel's cleanse order is Silence, Rot, Mark, then Weaken. Weaken is a debuff the cleanse understands. The director lands Silence, Rot, and Mark. Landing Weaken is deferred.
 - Detect on the shared bar is Azrael's disarm when a revealed trap is in reach, and a paid wide pulse otherwise. The passive aura is the short reveal. The pulse is not a fourth active.
 - The altar charge auto-spends on the next death (short delay, half health) and lands inside the 3-second downed window. It does not rewind a death that has already gone final.
 - A slow revive already being cast holds the downed window open until the cast lands or is interrupted.

@@ -34,6 +34,14 @@ func run_all() -> int:
 		"test_command_bar_drives_kits",
 		"test_kit_commands_are_deterministic",
 		"test_director_uses_nodes_only",
+		"test_trap_cap_is_per_room",
+		"test_commitment_telegraphs_before_it_lands",
+		"test_director_tiers_follow_rooms_in_play",
+		"test_director_reinforces_the_next_room",
+		"test_director_elite_commit_is_telegraphed",
+		"test_director_curse_shows_a_cast_bar",
+		"test_director_defends_the_stake_first",
+		"test_director_spends_dark_on_the_march",
 		"test_competent_policy_can_win",
 		"test_march_takes_minutes",
 		"test_per_member_hp_downed_and_revive",
@@ -468,6 +476,323 @@ func test_gabriel_aura() -> void:
 		fail("aura %d vs %d" % [base, bare])
 
 
+func test_trap_cap_is_per_room() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 10000
+	sim.submit("trap", {"kind": "spike", "node": "trapped:choke"}, "demon", 1)
+	sim.submit("trap", {"kind": "snare", "node": "trapped:center"}, "demon", 1)
+	sim.tick_once()
+	sim.tick_once()
+	var why := sim.legal_trap("hellflame", "trapped:flank")
+	if why != "room":
+		fail("third trap in one room was allowed (%s)" % why)
+
+
+func test_commitment_telegraphs_before_it_lands() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	_stand(sim, "fork")
+	var before := sim.dark
+	sim.submit("commit", {
+		"plan": "trap_cluster",
+		"pieces": [
+			{"kind": "spike", "node": "trapped:choke"},
+			{"kind": "hellflame", "node": "trapped:center"},
+		],
+	}, "demon", 1)
+	sim.tick_once()
+	if sim.dark >= before:
+		fail("cluster did not spend Dark on commit (%d -> %d)" % [before, sim.dark])
+	if not _find_kind(sim, "trap").is_empty():
+		fail("traps existed during the cluster cast")
+	var commits: Array = sim.build_snapshot().get("commitments", [])
+	if commits.is_empty():
+		fail("trap cluster had no cast the angels could read")
+		return
+	var land := int(commits[0].land)
+	if land - sim.tick < 60:
+		fail("cluster cast shorter than 3s (%d)" % (land - sim.tick))
+	while sim.tick < land - 1:
+		sim.tick_once()
+		if not _find_kind(sim, "trap").is_empty():
+			fail("trap armed before the cluster cast finished")
+			return
+	sim.tick_once()
+	var armed := 0
+	var revealed := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "trap" and bool(e.get("armed", false)):
+			armed += 1
+			if bool(e.get("revealed", false)):
+				revealed += 1
+	if armed != 2:
+		fail("cluster armed %d traps" % armed)
+		return
+	if revealed != 2:
+		fail("witnessed cluster stayed hidden (%d revealed)" % revealed)
+		return
+	sim.dark = 5000
+	sim.submit("trap", {"kind": "snare", "node": "cursed:rear"}, "demon", 1)
+	sim.tick_once()
+	var snare := {}
+	for id2 in sim.order:
+		var e2: Dictionary = sim.entities[id2]
+		if str(e2.kind) == "trap" and str(e2.subtype) == "snare":
+			snare = e2
+	if snare.is_empty():
+		fail("quiet snare was not placed ahead")
+		return
+	if bool(snare.get("revealed", false)):
+		fail("quiet snare was revealed without Detect")
+		return
+	if sim.legal_trap("snare", "trapped:flank") != "room":
+		fail("room cap after the cluster: %s" % sim.legal_trap("snare", "trapped:flank"))
+		return
+	sim.golden = 8000
+	var trap := {}
+	for id3 in sim.order:
+		var e3: Dictionary = sim.entities[id3]
+		if str(e3.kind) == "trap" and bool(e3.get("armed", false)) and bool(e3.get("revealed", false)):
+			trap = e3
+			break
+	sim._hero("azrael").pos = trap.pos
+	sim.submit("ability", {"name": "disarm"})
+	sim.tick_once()
+	if bool(trap.get("armed", true)):
+		fail("disarm did not answer the committed trap")
+
+
+func test_director_tiers_follow_rooms_in_play() -> void:
+	var early := CombatSim.new()
+	_stand(early, "seal")
+	early.rooms_cleared = 0
+	early.dark = 10000
+	early.visited["fork"] = true
+	early.director.fortified = {}
+	_ready_director(early)
+	for _i in 30:
+		early.tick_once()
+	if early.count_subtype("heavy") > 0 or early.count_subtype("elite") > 0:
+		fail("high tier defended the seal before any rooms were cleared")
+	var mid := CombatSim.new()
+	_stand(mid, "font")
+	mid.rooms_cleared = Balance.HEAVY_ROOMS
+	mid.stage_reached = 1
+	mid.seal_done = true
+	mid.visited["fork"] = true
+	mid.dark = 10000
+	_ready_director(mid)
+	var heavy := false
+	for _j in 40:
+		mid.tick_once()
+		if mid.count_subtype("elite") > 0:
+			fail("elite defended the font at the heavy gate")
+			return
+		if mid.count_subtype("heavy") > 0:
+			heavy = true
+	if not heavy:
+		fail("director did not bring a heavy to the font once %d rooms were clear" % Balance.HEAVY_ROOMS)
+
+
+func test_director_reinforces_the_next_room() -> void:
+	var sim := CombatSim.new()
+	_stand(sim, "summoned")
+	sim.stage_reached = 1
+	sim.rooms_cleared = Balance.HEAVY_ROOMS
+	sim.seal_done = true
+	sim.font_done = true
+	sim.altar_done = true
+	sim.dark = 9500
+	sim.director.fortified = {"seal": true, "font": true, "altar": true}
+	sim.director.committed["summoned"] = 1
+	sim.director.resolved["summoned"] = true
+	sim._hero("raphael").silence_until = 9000
+	_ready_director(sim)
+	sim.submit("spawn", {"unit": "heavy", "node": "summoned:flank"}, "demon", 1)
+	sim.tick_once()
+	var ahead := str(sim.director._next_content_room())
+	var fought := str(sim.party_room())
+	if ahead == "" or ahead == fought:
+		fail("ahead=%s party=%s" % [ahead, fought])
+		return
+	for _i in 12:
+		sim.director.next_decision = 0
+		sim.tick_once()
+	var heavies_in_fight := 0
+	var heavies_ahead := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.subtype) != "heavy":
+			continue
+		if str(e.get("home", "")) == fought:
+			heavies_in_fight += 1
+		if str(e.get("home", "")) == ahead:
+			heavies_ahead += 1
+	if heavies_in_fight > 1:
+		fail("another heavy joined the room being fought (%s)" % fought)
+	if heavies_ahead < 1:
+		fail("heavy did not reinforce the next room %s" % ahead)
+
+
+func test_director_elite_commit_is_telegraphed() -> void:
+	var early := CombatSim.new()
+	_stand(early, "cross3")
+	early.rooms_cleared = Balance.ELITE_ROOMS - 1
+	early.stage_reached = 2
+	early.seal_done = true
+	early.font_done = true
+	early.visited["fork"] = true
+	early.dark = 10000
+	_ready_director(early)
+	for _i in 40:
+		early.tick_once()
+		if early.count_subtype("elite") > 0:
+			fail("elite spawned at %d rooms" % early.rooms_cleared)
+			return
+		for c in early.build_snapshot().get("commitments", []):
+			if str(c.get("plan", "")) == "elite":
+				fail("elite commitment before %d rooms" % Balance.ELITE_ROOMS)
+				return
+	var sim := CombatSim.new()
+	_stand(sim, "cross3")
+	sim.rooms_cleared = Balance.ELITE_ROOMS
+	sim.stage_reached = 2
+	sim.seal_done = true
+	sim.font_done = true
+	sim.visited["fork"] = true
+	sim.dark = 10000
+	_ready_director(sim)
+	var saw := false
+	for _j in 120:
+		sim.tick_once()
+		if sim.count_subtype("elite") > 0 and not saw:
+			fail("elite appeared before its commitment cast")
+			return
+		for c2 in sim.build_snapshot().get("commitments", []):
+			if str(c2.get("plan", "")) != "elite":
+				continue
+			if not saw and int(c2.land) - sim.tick < 50:
+				fail("elite cast was %d ticks" % (int(c2.land) - sim.tick))
+				return
+			saw = true
+		if saw and sim.count_subtype("elite") > 0:
+			break
+	if not saw:
+		fail("director never committed the altar elite")
+		return
+	var guard := 0
+	while sim.count_subtype("elite") == 0 and guard < 90:
+		sim.tick_once()
+		guard += 1
+	var elite := _find_subtype(sim, "elite")
+	if elite.is_empty():
+		fail("committed elite never arrived")
+		return
+	var aff: Array = elite.affixes
+	if aff.size() != 2 or not aff.has("teleporter") or not aff.has("molten"):
+		fail("elite affixes %s" % str(aff))
+	if int(elite.get("active_at", 0)) <= sim.tick:
+		fail("elite could act before its spawn telegraph")
+
+
+func test_director_curse_shows_a_cast_bar() -> void:
+	var sim := CombatSim.new()
+	_stand(sim, "gallery1")
+	sim.stage_reached = 1
+	sim.rooms_cleared = 2
+	sim.seal_done = true
+	sim.font_done = true
+	sim.altar_done = true
+	sim.dark = 9000
+	sim.stance = CombatSim.STANCE_SPREAD
+	sim.director.fortified = {"seal": true, "font": true, "altar": true}
+	sim.director.committed["gallery1"] = 1
+	sim.director.resolved["gallery1"] = true
+	_ready_director(sim)
+	var saw := false
+	for _i in 80:
+		sim.tick_once()
+		var curses: Array = sim.build_snapshot().curses
+		if curses.is_empty():
+			continue
+		saw = true
+		var curse: Dictionary = curses[0]
+		if int(curse.land) - sim.tick < 40:
+			fail("director curse cast too short")
+			return
+		var hero := sim._ent(int(curse.target))
+		if int(hero.get("mark_until", 0)) > sim.tick or int(hero.get("silence_until", 0)) > sim.tick or int(hero.get("rot_until", 0)) > sim.tick:
+			fail("curse debuff was active during the cast bar")
+			return
+		break
+	if not saw:
+		fail("director never telegraphed a curse")
+
+
+func test_director_defends_the_stake_first() -> void:
+	var sim := CombatSim.new()
+	_stand(sim, "seal")
+	sim.visited["fork"] = true
+	sim.dark = 10000
+	sim.stance = CombatSim.STANCE_SPREAD
+	_ready_director(sim)
+	for _i in 6:
+		sim.tick_once()
+		if sim.mob_count() > 0:
+			break
+	var at_stake := 0
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.kind) == "mob" and bool(e.alive) and str(e.get("home", "")) == "seal":
+			at_stake += 1
+	if at_stake < 1:
+		fail("seal was threatened and the director did not defend it")
+	if not _find_kind(sim, "curse").is_empty():
+		fail("a curse landed before the stake defender")
+
+
+func test_director_spends_dark_on_the_march() -> void:
+	var sim := CombatSim.new()
+	_stand_corridor(sim, "m3a_0")
+	sim.stage_reached = 3
+	sim.rooms_cleared = 6
+	sim.seal_done = true
+	sim.font_done = true
+	sim.altar_done = true
+	sim.dark = Balance.ELIXIR_MAX
+	sim.golden = 9000
+	sim.director.fortified = {"seal": true, "font": true, "altar": true}
+	sim.director.committed["gallery3"] = 1
+	sim.director.resolved["gallery3"] = true
+	_ready_director(sim)
+	var before := sim.traps_placed + sim.spawns_placed + sim.curses_cast
+	var late_max := 0
+	for i in 900:
+		if sim.outcome != "":
+			fail("march wiped the party: %s" % sim.debug_string())
+			return
+		if sim.lowest_angel_hp_pct() < 65:
+			sim.golden = maxi(sim.golden, 8000)
+			sim.submit("heal", {})
+		if sim.tick % 25 == 0:
+			var tile := Fixed.tile_of(sim.anchor) + Vector2i(3, 0)
+			if sim.map.at(tile) < 0:
+				tile = Fixed.tile_of(sim.anchor) + Vector2i(-3, 0)
+			if sim.map.at(tile) >= 0:
+				sim.submit("move_tile", {"tile": tile})
+		sim.tick_once()
+		if i >= 500 and sim.dark > late_max:
+			late_max = sim.dark
+	var spent := sim.traps_placed + sim.spawns_placed + sim.curses_cast - before
+	if spent < 3:
+		fail("director spent %d actions on the march" % spent)
+	if late_max >= Balance.ELIXIR_MAX - 200:
+		fail("late march Dark climbed back to the cap (%d) after %d spends" % [late_max, spent])
+
+
 func test_director_uses_nodes_only() -> void:
 	var sim := CombatSim.new()
 	for _i in 200:
@@ -503,7 +828,9 @@ func test_competent_policy_can_win() -> void:
 				print("  feed ", _feed(sim))
 		if sim.phase == "lucifer" and not announced:
 			announced = true
-			print("  lucifer ", sim.debug_string(), " echo=", sim.echo_units, " style=", sim.echo_style)
+			print("  lucifer ", sim.debug_string(), " echo=", sim.echo_units, " style=", sim.echo_style, " traps=", sim.traps_placed, " spawns=", sim.spawns_placed, " curses=", sim.curses_cast)
+			if sim.echo_units.size() >= 6:
+				fail("healthy siege still paid the capped echo %s" % str(sim.echo_units))
 		if sim.tick % 2000 == 0:
 			print("  ", sim.debug_string())
 	var crawl_s := float(lucifer_tick) / 20.0
@@ -1598,6 +1925,47 @@ func _spend_ok(sim: CombatSim, cmd: String, ability: String, bounty: int = 0) ->
 		return false
 	return true
 
+
+
+func _stand(sim: CombatSim, room: String) -> void:
+	sim.director_enabled = false
+	var tile := sim.map.center_tile(room)
+	if tile == Vector2i.ZERO:
+		var keys: Array = sim.map.node_keys(room)
+		if not keys.is_empty():
+			tile = sim.map.node_tile(str(keys[0]))
+	sim.anchor = Fixed.tile_center(tile)
+	for a in sim._angels():
+		a.pos = sim.anchor
+	sim.path = []
+	sim.tick_once()
+
+
+func _stand_corridor(sim: CombatSim, room: String) -> void:
+	var idx := -1
+	for i in sim.map.rooms.size():
+		if str(sim.map.rooms[i].id) == room:
+			idx = i
+			break
+	var tile := Vector2i.ZERO
+	var w := sim.map.width
+	for i in sim.map.room_of.size():
+		if int(sim.map.room_of[i]) == idx:
+			tile = Vector2i(i % w, int(i / w))
+			break
+	sim.director_enabled = false
+	sim.anchor = Fixed.tile_center(tile)
+	for a in sim._angels():
+		a.pos = sim.anchor
+	sim.path = []
+	sim.tick_once()
+
+
+func _ready_director(sim: CombatSim) -> void:
+	sim.director.opening_abandoned = true
+	sim.director.next_decision = 0
+	sim.director.pressure_lock = 0
+	sim.director_enabled = true
 
 
 func _fresh_trap(kind: String, node: String) -> CombatSim:
