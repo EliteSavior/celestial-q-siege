@@ -31,6 +31,10 @@ func boot() -> void:
 	sim = CombatSim.new()
 	board = BoardScript.new()
 	board.game = self
+	# STOP so the play field is the control Godot's picker hits for a map tap.
+	# ScreenTouch is delivered to that control and never reaches _unhandled_input
+	# once any full-rect STOP node (the old root) claims it.
+	board.mouse_filter = Control.MOUSE_FILTER_STOP
 	board.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(board)
 	juice = FeelScript.new()
@@ -41,6 +45,7 @@ func boot() -> void:
 	juice.setup()
 	hud = HudScript.new()
 	hud.game = self
+	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(hud)
 	hud.build()
@@ -70,10 +75,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_key(event.keycode)
 		return
 	if event is InputEventScreenDrag:
-		board.handle_drag(event.position)
+		note_drag(event.position)
 		return
 	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
-		board.handle_drag(event.position)
+		note_drag(event.position)
 		return
 	var pos := Vector2.INF
 	if event is InputEventScreenTouch and event.pressed:
@@ -82,11 +87,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		pos = event.position
 	if pos == Vector2.INF:
 		return
+	note_tap(pos)
+
+
+func note_tap(screen: Vector2) -> void:
+	if briefing or board == null:
+		return
 	var frame := Engine.get_process_frames()
 	if frame == _tap_frame:
 		return
 	_tap_frame = frame
-	board.handle_tap(pos)
+	board.handle_tap(screen)
+
+
+func note_drag(screen: Vector2) -> void:
+	if briefing or board == null:
+		return
+	board.handle_drag(screen)
 
 
 func command(type: String, args: Dictionary = {}) -> void:
@@ -141,5 +158,4 @@ func _key(code: Key) -> void:
 		KEY_SPACE:
 			paused = not paused
 		KEY_R:
-			if sim.outcome != "":
-				restart()
+			restart()

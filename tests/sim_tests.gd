@@ -2,6 +2,11 @@ extends RefCounted
 
 var failures: Array = []
 var host = null
+var ran := 0
+## Callbacks that must run after the next canvas flush. Headless does not
+## invoke _draw inside notification(NOTIFICATION_DRAW); the redraw callback
+## runs between frames.
+var after_frame: Array = []
 
 
 func run_all() -> int:
@@ -59,6 +64,10 @@ func run_all() -> int:
 		"test_command_bar_routes_every_button",
 		"test_elixir_spend_cap_and_interaction_income",
 		"test_scene_touch_playable",
+		"test_touch_reaches_the_board_and_forgiving_taps",
+		"test_in_run_menu_restarts_or_returns_to_title",
+		"test_guide_arrow_and_persistent_prompt",
+		"test_opening_grace_before_the_player_acts",
 		"test_threat_tells_are_distinct",
 		"test_win_lose_restart_loop",
 		"test_coach_hints_name_the_loop",
@@ -66,20 +75,29 @@ func run_all() -> int:
 		"test_human_policy_can_win",
 		"test_walking_past_the_kit_loses",
 	]
+	ran = tests.size()
 	for name in tests:
+		_flush_queued_frees()
 		call(name)
-	if failures.is_empty():
-		print("OK %d tests" % tests.size())
-		return 0
-	for f in failures:
-		print("FAIL ", f)
-	print("%d failed" % failures.size())
-	return 1
+	return 0 if failures.is_empty() else 1
 
 
 func fail(msg: String) -> void:
 	failures.append(msg)
 	print("  x ", msg)
+
+
+## queue_free waits for idle, and the suite runs inside one frame.
+## Drop those nodes now so a later scene test is the only control under the cursor.
+func _flush_queued_frees() -> void:
+	if host == null:
+		return
+	var pending: Array = []
+	for child in host.root.get_children():
+		if child.is_queued_for_deletion():
+			pending.append(child)
+	for child in pending:
+		child.free()
 
 
 func test_map_connects() -> void:
@@ -93,11 +111,18 @@ func test_map_connects() -> void:
 
 func test_opening_bank_funds_the_first_decision() -> void:
 	var sim := CombatSim.new()
+	# 1.0.1: 6500 milli (6.5). Shield 3000 + Heal 1500 leaves 2000,
+	# a Cleanse or one 2.0 active, not a Burst (3000). Was 5000 in 1.0.0.
+	if sim.golden != 6500:
+		fail("opening golden %d, want 6500" % sim.golden)
+		return
 	var need := Balance.cost("shield_wall") + Balance.cost("single_heal")
-	if sim.golden < need + 500:
-		fail("opening golden %d does not cover shield and a heal with a cushion" % sim.golden)
-	if sim.golden - need >= Balance.cost("burst"):
-		fail("opening cushion %d funds another full cast" % (sim.golden - need))
+	var cushion := sim.golden - need
+	if cushion != 2000:
+		fail("opening cushion %d, want 2000" % cushion)
+		return
+	if cushion >= Balance.cost("burst"):
+		fail("opening cushion %d funds a burst" % cushion)
 
 
 func test_elixir_compounds_by_stage() -> void:
@@ -405,7 +430,7 @@ func test_turtle_corruption() -> void:
 	idle.director_enabled = false
 	var moving := CombatSim.new()
 	moving.director_enabled = false
-	for _i in 420:
+	for _i in Balance.OPENING_GRACE_TICKS + 420:
 		if idle.tick % 50 == 0:
 			var t := Fixed.tile_of(moving.anchor) + Vector2i(1, 0)
 			if moving.map.at(t) < 0:
@@ -2719,6 +2744,382 @@ func test_walking_past_the_kit_loses() -> void:
 		return
 	if sim.altar_done:
 		fail("passive run banked the altar")
+
+
+func test_touch_reaches_the_board_and_forgiving_taps() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted: Array = _mount_main()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	game.briefing = false
+	game.paused = true
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game._process(0.0)
+	game.board._process(0.0)
+	if main.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		fail("root control still captures pointers (%s)" % main.mouse_filter)
+		main.queue_free()
+		return
+	if game.board.mouse_filter != Control.MOUSE_FILTER_STOP:
+		fail("play field does not claim taps")
+		main.queue_free()
+		return
+	if game.hud.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		fail("hud root captures the play area")
+		main.queue_free()
+		return
+	var tile: Vector2i = Fixed.tile_of(game.sim.anchor) + Vector2i(2, 0)
+	if game.sim.map.at(tile) < 0:
+		tile = Fixed.tile_of(game.sim.anchor) + Vector2i(0, 1)
+	var pos: Vector2 = game.board._milli_screen(Fixed.tile_center(tile))
+	var motion := InputEventMouseMotion.new()
+	motion.position = pos
+	motion.global_position = pos
+	game.get_viewport().push_input(motion, true)
+	var hovered: Control = game.get_viewport().gui_get_hovered_control()
+	if hovered == main or hovered == game.hud:
+		fail("map hover hit %s instead of the play field" % hovered)
+		main.queue_free()
+		return
+	game._tap_frame = -1
+	var queued: int = game.sim.queue.size()
+	var touch := InputEventScreenTouch.new()
+	touch.pressed = true
+	touch.index = 0
+	touch.position = pos
+	game.get_viewport().push_input(touch, true)
+	if game.sim.queue.size() <= queued:
+		fail("InputEventScreenTouch did not reach the board at %s" % pos)
+		main.queue_free()
+		return
+	var moved: Dictionary = game.sim.queue.back()
+	if str(moved.type) != "move_tile" and str(moved.type) != "move_room":
+		fail("walkable touch submitted %s" % moved.type)
+		main.queue_free()
+		return
+	var anchor_tile: Vector2i = Fixed.tile_of(game.sim.anchor)
+	var void_tile := Vector2i(-1, -1)
+	var void_pos := Vector2.ZERO
+	for dist in range(1, 14):
+		for d in [Vector2i(dist, 0), Vector2i(-dist, 0), Vector2i(0, dist), Vector2i(0, -dist)]:
+			var t: Vector2i = anchor_tile + d
+			if game.sim.map.at(t) >= 0:
+				continue
+			var screen: Vector2 = game.board._milli_screen(Fixed.tile_center(t))
+			if screen.x < 210.0 or screen.y < 120.0 or screen.y > game.board.size.y - 250.0:
+				continue
+			void_tile = t
+			void_pos = screen
+			break
+		if void_tile.x >= 0:
+			break
+	if void_tile.x < 0:
+		fail("no void tile inside the play field")
+		main.queue_free()
+		return
+	game._tap_frame = -1
+	queued = game.sim.queue.size()
+	var void_touch := InputEventScreenTouch.new()
+	void_touch.pressed = true
+	void_touch.index = 1
+	void_touch.position = void_pos
+	game.get_viewport().push_input(void_touch, true)
+	if game.sim.queue.size() <= queued:
+		fail("void tap at %s still no-opped" % void_pos)
+		main.queue_free()
+		return
+	var void_cmd: Dictionary = game.sim.queue.back()
+	if str(void_cmd.type) != "move_tile" and str(void_cmd.type) != "move_room":
+		fail("void tap submitted %s" % void_cmd.type)
+		main.queue_free()
+		return
+	game.sim._make_mob("imp", "Imp", game.sim.anchor + Vector2i(700, 0), 80, 1, 50, 100, 0, [], "start:center")
+	for id in game.sim.order:
+		var foe: Dictionary = game.sim.entities[id]
+		if str(foe.subtype) == "imp":
+			foe.active_at = 0
+	game._process(0.0)
+	game.board._process(0.0)
+	var foe_pos := Vector2.ZERO
+	for row in game.board.snap.foes:
+		if str(row.subtype) == "imp":
+			foe_pos = game.board._milli_screen(row.pos)
+	game._tap_frame = -1
+	queued = game.sim.queue.size()
+	var focus := InputEventScreenTouch.new()
+	focus.pressed = true
+	focus.index = 2
+	focus.position = foe_pos
+	game.get_viewport().push_input(focus, true)
+	if game.sim.queue.size() <= queued or str(game.sim.queue.back().type) != "focus":
+		fail("foe touch did not focus, got %s" % (game.sim.queue.back() if game.sim.queue.size() > queued else {}))
+		main.queue_free()
+		return
+	var shield: Button = game.hud._bar.shield
+	var shield_at: Vector2 = shield.get_global_rect().get_center()
+	game.sim.golden = 8000
+	game._tap_frame = -1
+	queued = game.sim.queue.size()
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = shield_at
+	down.global_position = shield_at
+	game.get_viewport().push_input(down, true)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = shield_at
+	up.global_position = shield_at
+	game.get_viewport().push_input(up, true)
+	if game.sim.queue.size() <= queued or str(game.sim.queue.back().type) != "shield":
+		fail("command bar touch was stolen, last %s" % (game.sim.queue.back() if game.sim.queue.size() > queued else {}))
+		main.queue_free()
+		return
+	main.queue_free()
+
+
+func test_in_run_menu_restarts_or_returns_to_title() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var mounted: Array = _mount_main()
+	var main: Control = mounted[0]
+	var game = mounted[1]
+	game.sim.director_enabled = false
+	game.hud._begin.pressed.emit()
+	game._process(0.0)
+	if game.briefing or game.hud._menu == null or not game.hud._menu.visible:
+		fail("menu hidden during the run")
+		main.queue_free()
+		return
+	if str(game.hud._menu.text) != "Menu":
+		fail("menu label %s" % game.hud._menu.text)
+		main.queue_free()
+		return
+	var menu_r: Rect2 = game.hud._menu.get_rect()
+	if menu_r.size.x < 64.0 or menu_r.size.y < 64.0:
+		fail("menu touch target %s" % menu_r)
+		main.queue_free()
+		return
+	if menu_r.position.x < 0.0 or menu_r.position.y < 0.0 or menu_r.end.x > 1280.0 or menu_r.end.y > 720.0:
+		fail("menu sits outside 1280x720 %s" % menu_r)
+		main.queue_free()
+		return
+	var bar: Array = []
+	for cmd in ["shield", "heal", "cleanse", "detect", "burst"]:
+		bar.append(game.hud._bar[cmd])
+	for key in game.hud._stances.keys():
+		bar.append(game.hud._stances[key])
+	bar.append(game.hud._scatter)
+	bar.append(game.hud._phalanx)
+	for btn in bar:
+		var br: Rect2 = btn.get_rect()
+		if menu_r.intersects(br):
+			fail("menu overlaps %s at %s" % [btn.text, br])
+			main.queue_free()
+			return
+		if menu_r.position.y + menu_r.size.y > br.position.y:
+			fail("menu reaches the command bar %s vs %s" % [menu_r, br])
+			main.queue_free()
+			return
+	var center: Vector2 = game.hud._menu.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = center
+	motion.global_position = center
+	game.get_viewport().push_input(motion, true)
+	var hovered: Control = game.get_viewport().gui_get_hovered_control()
+	if hovered != game.hud._menu:
+		fail("menu button is not the touch target, hit %s" % hovered)
+		main.queue_free()
+		return
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = center
+	down.global_position = center
+	game.get_viewport().push_input(down, true)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = center
+	up.global_position = center
+	game.get_viewport().push_input(up, true)
+	if not game.hud._menu_dim.visible or not game.paused:
+		fail("menu press did not open the pause panel")
+		main.queue_free()
+		return
+	var held: int = game.sim.tick
+	game._process(1.0)
+	if game.sim.tick != held:
+		fail("open menu let the sim tick")
+		main.queue_free()
+		return
+	if game.hud._menu_restart.get_rect().size.y < 64.0 or game.hud._menu_title.get_rect().size.y < 48.0:
+		fail("menu actions are too small")
+		main.queue_free()
+		return
+	game.sim.tick = 40
+	game.hud._menu_restart.pressed.emit()
+	if game.briefing or game.sim.outcome != "" or game.sim.tick != 0 or game.hud._menu_dim.visible:
+		fail("restart from the menu did not open a fresh run: %s" % game.sim.debug_string())
+		main.queue_free()
+		return
+	game.sim.director_enabled = false
+	game.sim.tick = 12
+	game._process(0.0)
+	game.hud._menu.pressed.emit()
+	game.hud._menu_title.pressed.emit()
+	if not game.briefing or not game.hud._brief.visible or game.sim.tick != 0:
+		fail("title from the menu did not return to the start screen")
+		main.queue_free()
+		return
+	game._process(0.5)
+	if game.sim.tick != 0:
+		fail("title screen ticked after the menu")
+		main.queue_free()
+		return
+	if game.hud._menu.visible:
+		fail("menu stayed up on the title")
+	main.queue_free()
+
+
+func test_guide_arrow_and_persistent_prompt() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.sim.director_enabled = false
+	game._process(0.0)
+	game.board._process(0.0)
+	var g: Dictionary = game.board.guide(game.board.snap)
+	if not str(g.line).contains("Tap") or not str(g.line).contains("door"):
+		fail("opening prompt %s" % g.line)
+		game.queue_free()
+		return
+	if g.at == Vector2i.ZERO or str(g.kind) != "move":
+		fail("opening objective %s" % g)
+		game.queue_free()
+		return
+	game.board.queue_redraw()
+	var board = game.board
+	after_frame.append(func():
+		if not is_instance_valid(board) or not board.guide_drawn:
+			fail("objective arrow was not drawn")
+		if is_instance_valid(game):
+			game.queue_free()
+	)
+	if not game.hud._coach.visible or str(game.hud._coach.text) == "":
+		fail("coach hidden at the start")
+		game.queue_free()
+		return
+	for _i in 1000:
+		game.sim.tick_once()
+	game._process(0.0)
+	if not game.hud._coach.visible or str(game.hud._coach.text) == "":
+		fail("coach went blank after the old 45s cutoff: %s" % game.hud._coach.text)
+		game.queue_free()
+		return
+	game.sim._make_mob("imp", "Imp", game.sim.anchor + Vector2i(600, 0), 80, 1, 50, 100, 0, [], "start:center")
+	for id in game.sim.order:
+		var foe: Dictionary = game.sim.entities[id]
+		if str(foe.subtype) == "imp":
+			foe.active_at = 0
+	game._process(0.0)
+	var clear: Dictionary = game.board.guide(game.board.snap)
+	if not str(clear.line).contains("Clear the room"):
+		fail("clear prompt %s" % clear.line)
+		game.queue_free()
+		return
+	for id2 in game.sim.order:
+		var foe2: Dictionary = game.sim.entities[id2]
+		if str(foe2.subtype) == "imp":
+			foe2.alive = false
+			foe2.hp = 0
+	_stand(game.sim, "seal")
+	game.sim.director_enabled = false
+	game._process(0.0)
+	var stake: Dictionary = game.board.guide(game.board.snap)
+	if not str(stake.line).contains("Claim the stake"):
+		fail("stake prompt %s" % stake.line)
+		game.queue_free()
+		return
+	_stand(game.sim, "start")
+	game.sim._hero("raphael").hp = game.sim._hero("raphael").hp_max / 2
+	game.sim.golden = 8000
+	game._process(0.0)
+	var spend: Dictionary = game.board.guide(game.board.snap)
+	if not str(spend.line).contains("Spend elixir"):
+		fail("spend prompt %s" % spend.line)
+		return
+
+
+func test_opening_grace_before_the_player_acts() -> void:
+	var sim := CombatSim.new()
+	if sim.golden != 6500 or sim.dark != Balance.DARK_START:
+		fail("banks golden %d dark %d" % [sim.golden, sim.dark])
+		return
+	var dark0 := sim.dark
+	var gold0 := sim.golden
+	for _i in Balance.OPENING_GRACE_TICKS:
+		sim.tick_once()
+	if sim.golden <= gold0:
+		fail("golden did not tick during grace")
+		return
+	if sim.corruption or sim.idle_ticks > 0:
+		fail("turtle ran during grace idle=%d" % sim.idle_ticks)
+		return
+	# The director may spend the opening bank. Regen must not raise it.
+	if sim.dark > dark0:
+		fail("dark snowballed during grace %d -> %d" % [dark0, sim.dark])
+		return
+	var held := sim.dark
+	sim.director_enabled = false
+	sim.tick_once()
+	if sim.dark != held + Balance.dark_regen(0):
+		fail("dark did not resume after grace (%d -> %d)" % [held, sim.dark])
+		return
+	var fast := CombatSim.new()
+	fast.director_enabled = false
+	fast.submit("move_tile", {"tile": Fixed.tile_of(fast.anchor)})
+	var before := fast.dark
+	fast.tick_once()
+	if fast.opening_grace():
+		fail("grace stuck after the player moved")
+		return
+	if fast.dark != before + Balance.dark_regen(0):
+		fail("acted run dark %d want %d" % [fast.dark, before + Balance.dark_regen(0)])
+
+
+func _mount_main() -> Array:
+	var main := (load("res://Main.tscn") as PackedScene).instantiate()
+	main.boot_host()
+	_pin_screen(main)
+	host.root.add_child(main)
+	_pin_screen(main)
+	var game = main.get_child(main.get_child_count() - 1)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	if game.juice:
+		_pin_screen(game.juice)
+	game.hud._layout_bottom()
+	return [main, game]
 
 
 func _drive(policy, limit: int) -> Dictionary:
