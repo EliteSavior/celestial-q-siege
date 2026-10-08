@@ -4,13 +4,13 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M6 (Game feel & loop) — single-player MVP 1.0.1.** The siege is a loop: a start screen holds the clock, a run plays, victory and defeat are different screens, and either one can start a new run or return to the title. A **Menu** button stays up during the run and can restart or return to the title without waiting for the outcome. Nothing dead-ends. Threats are labeled and color-coded (curses, traps, commitments, Lucifer's four blows, the echo wave). Hits, heals, and button presses are view-layer only — flashes, short particles, and generated tones — and they never call `submit()`. A gold arrow points at the next doorway or objective, and a one-line coach stays visible (move, clear the room, claim the stake, spend elixir, plus the tells) until **Hide hints**. The director is unchanged: Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. Opening Golden is 6.5, enough for Shield and a Heal with 2.0 left (a Cleanse or one 2.0 active, not a Burst). Was 5.0 in 1.0.0. For 8 seconds, or until the first angel command, Dark regen and the idle clock are held; Golden still regens and the director still spends. The regen curve, the road, and Lucifer's health are unchanged. A scripted competent party reaches Lucifer at 492.8 seconds and wins at 599.7 seconds. The boss is 107.0 seconds. A slower human-style policy, which still claims every stake and answers the blows, wins at 596.2 seconds (boss 97.9 seconds). Walking the short road with auto-attacks only, and skipping the kit and the stakes, dies in the throne at 530.4 seconds. That run's scripted echo was one heavy, trap style. Placeholder shapes and beeps, not final art. No networking yet.
+> **Status: M6 (Game feel & loop) — single-player MVP 1.0.2.** The board is a fixed 2:1 isometric view. Simulation, commands, and the 20 Hz tick are unchanged from 1.0.1. The siege is a loop: a start screen holds the clock, a run plays, victory and defeat are different screens, and either one can start a new run or return to the title. A **Menu** button stays up during the run and can restart or return to the title without waiting for the outcome. Nothing dead-ends. Threats are labeled and color-coded (curses, traps, commitments, Lucifer's four blows, the echo wave). Hits, heals, and button presses are view-layer only — flashes, short particles, and generated tones — and they never call `submit()`. A gold arrow points at the next doorway or objective, and a one-line coach stays visible (move, clear the room, claim the stake, spend elixir, plus the tells) until **Hide hints**. The director is unchanged: Survive, then Protect the stake, then Exploit the stance, then Spend what is over the line. Opening Golden is 6.5, enough for Shield and a Heal with 2.0 left (a Cleanse or one 2.0 active, not a Burst). Was 5.0 in 1.0.0. For 8 seconds, or until the first angel command, Dark regen and the idle clock are held; Golden still regens and the director still spends. The regen curve, the road, and Lucifer's health are unchanged. A scripted competent party reaches Lucifer at 492.8 seconds and wins at 599.7 seconds. The boss is 107.0 seconds. A slower human-style policy, which still claims every stake and answers the blows, wins at 596.2 seconds (boss 97.9 seconds). Walking the short road with auto-attacks only, and skipping the kit and the stakes, dies in the throne at 530.4 seconds. That run's scripted echo was one heavy, trap style. Placeholder shapes and beeps, not final art. No networking yet.
 
 ---
 
 ## Play
 
-Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720, and the bottom bar follows a taller 800-tall window). The title screen explains the loop. **Begin the siege** starts the clock. Idle time in a cleared room feeds the demon, so the title does not tick the sim. A gold arrow marks the next doorway, and a one-line coach sits above the command bar until **Hide hints**. **Menu** (top right, under Pause) pauses and offers **Restart run**, **Title**, and **Resume**. Victory and defeat are separate screens. **Siege again** / **Try again** starts a new run. **Title** returns to the start screen. `R` restarts any time after the title.
+Open the project in Godot 4.7.2 and run `Main.tscn`. Phones open in portrait. The base layout is 1280×720 and expands on a tall screen, and the bottom bar follows a taller window. The board is drawn as 2:1 diamonds. The title screen explains the loop. **Begin the siege** starts the clock. Idle time in a cleared room feeds the demon, so the title does not tick the sim. A gold arrow marks the next doorway, and a one-line coach sits above the command bar until **Hide hints**. **Menu** (top right, under Pause) pauses and offers **Restart run**, **Title**, and **Resume**. Victory and defeat are separate screens. **Siege again** / **Try again** starts a new run. **Title** returns to the start screen. `R` restarts any time after the title.
 
 | Input | Action |
 | --- | --- |
@@ -78,7 +78,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 | `sim/dungeon_map.gd` | Three stages. Each is a fork, three different branches, a reconvergence, and a stake, plus a held nave on the march. |
 | `game/` | Rendering and touch input. Reads snapshots; never decides combat. |
 | `tests/` | Headless suite and the competent-angel policy. |
-| `project.godot` | Godot 4.7, Mobile renderer, landscape 1280×720. |
+| `project.godot` | Godot 4.7, Mobile renderer, portrait, base 1280×720. |
 | `export_presets.cfg` | Android preset named **`Android`**. |
 | `scripts/build-apk.sh` | One-command debug APK. |
 | `.github/workflows/build-apk.yml` | Builds and uploads an APK on push to `main` and on pull requests. |
@@ -86,7 +86,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `1.0.1` (versionCode `9`)
+- App name: `Celestial Q Siege`, version `1.0.2` (versionCode `10`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
