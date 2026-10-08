@@ -13,9 +13,17 @@ var speed := 1.0
 var paused := false
 var briefing := true
 var _tap_frame := -1
+var _booted := false
 
 
 func _ready() -> void:
+	boot()
+
+
+func boot() -> void:
+	if _booted:
+		return
+	_booted = true
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	sim = CombatSim.new()
