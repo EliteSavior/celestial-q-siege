@@ -4,7 +4,7 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M3 (the five hero kits).** Each angel has three actives and one passive, all on the same command sim. Michael taunts one enemy, raises a shield wall, and body-blocks the next single hit. Raphael heals one ally, heals the party, and slow-casts a revive. Azrael bursts, disarms a revealed trap, and dashes out. Uriel channels a beam you drag to steer, drops a holy zone, and disengages the squad. Gabriel cleanses (Silence, then Rot, then Mark, then Weaken), shields himself, and emergency-revives. Passives: Michael's bulk, Raphael's regen while he is not casting, Azrael's detect aura, Uriel's Radiance stacks, Gabriel's damage aura. Placeholder shapes, not final art. No networking yet.
+> **Status: M3 (the five hero kits) on the M2 combat core.** Per-angel health, auto-attack, and a 3-second downed window sit under five locked kits (3 actives + 1 passive). A lethal hit downs that angel; Raphael's slow revive, Gabriel's emergency resurrection, and the altar charge can still reach them until the window closes. Michael taunts one enemy, raises a shield wall, and body-blocks the next single hit. Raphael heals one ally, heals the party, and slow-casts a revive. Azrael bursts, disarms a revealed trap, and dashes out. Uriel channels a beam you drag to steer, drops a holy zone, and disengages the squad. Gabriel cleanses (Silence, then Rot, then Mark, then Weaken), shields himself, and emergency-revives. Passives: Michael's bulk, Raphael's regen while he is not casting, Azrael's detect aura, Uriel's Radiance stacks, Gabriel's damage aura. Twin elixir bars show the live banks and the stage regen. A scripted competent party still reaches the throne in about 8.6 minutes and wins in about 10.6. Placeholder shapes, not final art. No networking yet: every action, angel or demon, goes through `submit()`.
 
 ---
 
@@ -16,7 +16,8 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 | --- | --- |
 | Tap ground | Move the squad (deterministic path). |
 | Tap a doorway | Commit to that branch for 3 seconds. |
-| Tap an enemy | Focus fire. There is no target-priority toggle. |
+| Tap an enemy | Focus fire. Attacks themselves are automatic. |
+| Portrait | That angel's HP. DOWN counts 3 seconds, then the death is final. |
 | Tap the altar node | Channel the revive charge (the altar is in the demon's strongest room). |
 | Shield / Heal / Cleanse / Detect / Burst | Contextual commands. Each routes to the angel who owns it. |
 | Tap a portrait | Show that angel's three actives and passive. Back returns to the shared bar. |
@@ -26,6 +27,8 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 | 1–5, Z, X, Q/W/E | Same commands from a keyboard. |
 | 1x button | Cycle lab speed 1x / 2x / 3x. |
 | Space | Pause. R restarts after the outcome panel. |
+
+Combat is the sim, not the scene. Angels and demons auto-attack anything in range. Shield, Heal, Cleanse, Detect, and Burst are the only angel buttons; each one routes to the owner and spends Golden Elixir. There is no hand of cards. A lethal hit downs that angel for 3 seconds (the portrait and a ring on the board count it down). Emergency resurrection, Raphael's slow revive, or a banked altar charge can still reach them. When the window closes, the death is final and a full party of final deaths is a wipe. Golden comes from playing (a trap avoided, a cleanse, a kill), Dark from chipping angels, both capped per room. Neither bar drips extra to the side that is behind.
 
 Fog shows the current room and the next doorway. Traps stay hidden until Azrael's detect aura, a Detect pulse, or the lead angel steps on the tile. Curses show a cast bar before they land. Summons are visible when they spawn.
 
@@ -60,7 +63,7 @@ godot --headless --path . --import
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 30 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives, detect aura, Radiance), route lock, anti-turtle, echo budgeting, altar revive, the length of the road, and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at about 8.6 minutes and wins at about 10.6. The empty road, stakes included and no demon, is about 7.1 minutes and 1280 tiles.
+`res://tests/smoke.gd` only validates the map and advances 100 ticks. The suite is 36 headless tests: determinism, fog, elixir, tier gates, stakes, stance vs traps, curse telegraph, per-angel HP and the 3-second downed window, auto-attack, single-target and AoE shapes, the touch scene, the full five kits (cost, cooldown, shape, effect, cleanse order, disarm, dash, disengage, both revives inside the downed window, detect aura, Radiance), route lock, anti-turtle, echo budgeting, altar revive, the length of the road, and a scripted angel policy that can win. On the current tune that policy reaches Lucifer at about 8.6 minutes and wins at about 10.6. The empty road, stakes included and no demon, is about 7.1 minutes and 1280 tiles.
 
 ---
 
@@ -122,7 +125,8 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - Taunt pulls one mob (the focus, else whoever is on the backline), not the whole room. It also cancels that elite's blink.
 - Gabriel's cleanse order is Silence, Rot, Mark, then Weaken. Weaken is a debuff the cleanse understands; the MVP curses that land are still Silence, Rot, and Mark.
 - Detect on the shared bar is Azrael's disarm when a revealed trap is in reach, and a paid wide pulse otherwise. The passive aura is the short reveal. The pulse is not a fourth active.
-- The altar charge auto-spends on the next death (short delay, half health). It does not rewind a death.
+- The altar charge auto-spends on the next death (short delay, half health) and lands inside the 3-second downed window. It does not rewind a death that has already gone final.
+- A slow revive already being cast holds the downed window open until the cast lands or is interrupted.
 - Column eats spikes on the lead angel and suffers longer snares.
 - Purifying shrines from the design's section 19 are not in this build.
 - Gabriel's kit is cleanse, self-shield, emergency res, plus an always-on party damage aura. The active damage buff was dropped to keep three actives.

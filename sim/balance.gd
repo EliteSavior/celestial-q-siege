@@ -121,6 +121,9 @@ const ALTAR_PER_TICK := 2
 # 400 / 2 ticks = 10s to claim a stake. Long enough to be a hold, short of the turtle.
 const ALTAR_NEED := 400
 const ALTAR_REVIVE_DELAY := 20
+# Lethal damage downs an angel for 3 seconds. Revive rites can still reach
+# them; when the window closes the death is final.
+const DOWNED_TICKS := 60
 
 # The crawl is the siege. Lucifer is the climax, not most of the clock:
 # a healthy party burns this down in a couple of minutes of telegraphs.

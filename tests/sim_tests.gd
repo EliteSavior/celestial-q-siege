@@ -1,6 +1,7 @@
 extends RefCounted
 
 var failures: Array = []
+var host = null
 
 
 func run_all() -> int:
@@ -35,6 +36,12 @@ func run_all() -> int:
 		"test_director_uses_nodes_only",
 		"test_competent_policy_can_win",
 		"test_march_takes_minutes",
+		"test_per_member_hp_downed_and_revive",
+		"test_auto_attack_needs_no_order",
+		"test_damage_shapes_single_and_aoe",
+		"test_command_bar_routes_every_button",
+		"test_elixir_spend_cap_and_interaction_income",
+		"test_scene_touch_playable",
 	]
 	for name in tests:
 		call(name)
@@ -1104,6 +1111,493 @@ func _zone_damage(stacks: int) -> int:
 	if int(sim._hero("raphael").hp) != angel:
 		fail("holy zone damaged an angel")
 	return 400 - int(inside.hp)
+
+
+
+func test_per_member_hp_downed_and_revive() -> void:
+	if Balance.DOWNED_TICKS != Balance.TICK_HZ * 3:
+		fail("downed window is not 3 seconds")
+		return
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var michael := sim._hero("michael")
+	var raphael := sim._hero("raphael")
+	var before_r := int(raphael.hp)
+	sim._hurt(michael, 50, "single", 0, false)
+	if int(michael.hp) >= int(michael.hp_max):
+		fail("michael took no damage")
+		return
+	if int(raphael.hp) != before_r:
+		fail("single hit splashed onto raphael")
+		return
+	sim._hurt(michael, 99999, "single", 0, false)
+	if michael.alive or bool(michael.final_death):
+		fail("lethal hit was not a downed telegraph")
+		return
+	if int(michael.downed_until) - sim.tick != Balance.DOWNED_TICKS:
+		fail("window %d" % (int(michael.downed_until) - sim.tick))
+		return
+	if sim.outcome == "demon":
+		fail("one downed angel wiped the party")
+		return
+	var snap := sim.build_snapshot()
+	if snap.heroes.size() != 5 or not bool(snap.heroes.michael.downed):
+		fail("snapshot did not mark michael downed")
+		return
+	sim.golden = 9000
+	sim.submit("ability", {"name": "emergency_res"})
+	sim.tick_once()
+	if not michael.alive or int(michael.hp) <= 0:
+		fail("emergency revive missed the window: %s" % _feed(sim))
+		return
+	var az := sim._hero("azrael")
+	sim._hurt(az, 99999, "single", 0, false)
+	az.downed_until = sim.tick + 3
+	sim.golden = 9000
+	sim.submit("ability", {"name": "slow_revive"})
+	for _i in 70:
+		sim.tick_once()
+		if az.alive:
+			break
+	if not az.alive or bool(az.final_death):
+		fail("slow revive did not hold the window: %s" % _feed(sim))
+		return
+	sim._hurt(michael, 99999, "single", 0, false)
+	for _j in Balance.DOWNED_TICKS:
+		sim.tick_once()
+	if not bool(michael.final_death) or michael.alive:
+		fail("death did not become final, left %d" % (int(michael.downed_until) - sim.tick))
+		return
+	sim.golden = 9000
+	sim._hero("gabriel").cooldowns.erase("emergency_res")
+	sim.submit("ability", {"name": "emergency_res"})
+	sim.tick_once()
+	if michael.alive:
+		fail("emergency revived a final death")
+		return
+	if sim.golden != 9000 + Balance.golden_regen(0):
+		fail("final death still spent golden (%d)" % sim.golden)
+		return
+	var wipe := CombatSim.new()
+	wipe.director_enabled = false
+	for a in wipe._angels():
+		wipe._hurt(a, 99999, "single", 0, false)
+	if wipe.outcome == "demon":
+		fail("wipe fired inside the downed window")
+		return
+	for _k in Balance.DOWNED_TICKS - 1:
+		wipe.tick_once()
+	if wipe.outcome == "demon":
+		fail("wipe fired before 3 seconds")
+		return
+	wipe.tick_once()
+	if wipe.outcome != "demon":
+		fail("wipe did not resolve when every window closed")
+
+
+func test_auto_attack_needs_no_order() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var michael := sim._hero("michael")
+	sim._make_mob("imp", "Imp", michael.pos, 400, 8, 10, 2000, 0, [], "start:center")
+	var imp := _find_subtype(sim, "imp")
+	imp.active_at = 0
+	imp.atk_cd = 1
+	for a in sim._angels():
+		a.atk_cd = 1
+	var hp_m := int(michael.hp)
+	var hp_i := int(imp.hp)
+	for _i in 30:
+		sim.tick_once()
+	if sim.queue.size() != 0:
+		fail("auto-attack queued a player command")
+	if int(michael.hp) >= hp_m:
+		fail("imp did not auto-attack")
+	if int(imp.hp) >= hp_i:
+		fail("angels did not auto-attack")
+	if int(sim.stats.damage_dealt) <= 0 or int(sim.stats.damage_taken) <= 0:
+		fail("auto-attack did not record damage")
+
+
+func test_damage_shapes_single_and_aoe() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	for a in sim._angels():
+		a.atk_cd = 500
+	var az := sim._hero("azrael")
+	sim._make_mob("imp", "A", az.pos, 300, 1, 99, 100, 0, [], "start:center")
+	sim._make_mob("imp", "B", az.pos + Vector2i(400, 0), 300, 1, 99, 100, 0, [], "start:center")
+	var imps: Array = []
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.subtype) == "imp":
+			e.active_at = 0
+			e.atk_cd = 999
+			imps.append(e)
+	sim.focus_id = int(imps[0].id)
+	sim.focus_until = 9999
+	sim.golden = 9000
+	var hp0 := int(imps[0].hp)
+	var hp1 := int(imps[1].hp)
+	sim.submit("ability", {"name": "burst"})
+	sim.tick_once()
+	if int(imps[0].hp) >= hp0:
+		fail("burst missed the focus")
+		return
+	if int(imps[1].hp) != hp1:
+		fail("single-target burst splashed")
+		return
+	var after0 := int(imps[0].hp)
+	var after1 := int(imps[1].hp)
+	sim.golden = 9000
+	sim.submit("ability", {"name": "aoe_zone"})
+	sim.tick_once()
+	if int(imps[0].hp) >= after0 or int(imps[1].hp) >= after1:
+		fail("holy zone did not hit both imps (%d, %d)" % [int(imps[0].hp), int(imps[1].hp)])
+		return
+	var heal := CombatSim.new()
+	heal.director_enabled = false
+	var gabriel := heal._hero("gabriel")
+	gabriel.hp = 40
+	var untouched := {}
+	for a2 in heal._angels():
+		if str(a2.subtype) != "gabriel":
+			untouched[a2.subtype] = int(a2.hp)
+	heal.golden = 9000
+	heal.submit("ability", {"name": "single_heal"})
+	heal.tick_once()
+	if int(gabriel.hp) <= 40:
+		fail("single heal missed gabriel")
+		return
+	for subtype in untouched.keys():
+		if int(heal._hero(str(subtype)).hp) != int(untouched[subtype]):
+			fail("single heal hit %s" % subtype)
+			return
+	for a3 in heal._angels():
+		a3.hp = int(a3.hp_max) - 40
+		a3.alive = true
+		a3.final_death = false
+	var before := {}
+	for a4 in heal._angels():
+		before[a4.subtype] = int(a4.hp)
+	heal.golden = 9000
+	heal._hero("raphael").cooldowns.erase("party_heal")
+	heal.submit("ability", {"name": "party_heal"})
+	heal.tick_once()
+	for a5 in heal._angels():
+		var gain := int(a5.hp) - int(before[a5.subtype])
+		if str(a5.subtype) == "raphael":
+			if gain < 32:
+				fail("party heal raphael %+d" % gain)
+				return
+		elif gain != 32:
+			fail("party heal %s %+d" % [a5.subtype, gain])
+			return
+	heal._hurt(heal._hero("azrael"), 99999, "single", 0, false)
+	heal.golden = 9000
+	heal._hero("raphael").cooldowns.erase("party_heal")
+	heal.submit("ability", {"name": "party_heal"})
+	heal.tick_once()
+	if heal._hero("azrael").alive:
+		fail("party heal raised a downed angel")
+		return
+	var molten := CombatSim.new()
+	molten.director_enabled = false
+	molten._make_mob("elite", "Elite", molten.anchor, 900, 1, 999, 100, 0, ["molten"], "start:center")
+	var elite := _find_subtype(molten, "elite")
+	elite.active_at = 0
+	elite.atk_cd = 999
+	for a6 in molten._angels():
+		a6.atk_cd = 999
+	var hp_before := {}
+	for a7 in molten._angels():
+		hp_before[a7.subtype] = int(a7.hp)
+	for _i in 20:
+		molten.tick_once()
+	var hit := 0
+	for a8 in molten._angels():
+		if int(a8.hp) < int(hp_before[a8.subtype]):
+			hit += 1
+	if hit < 3:
+		fail("molten aoe hit %d angels" % hit)
+
+
+func test_command_bar_routes_every_button() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var snap := sim.build_snapshot()
+	var expect := {
+		"shield": "michael",
+		"heal": "raphael",
+		"cleanse": "gabriel",
+		"detect": "azrael",
+		"burst": "uriel",
+	}
+	for cmd in expect.keys():
+		if not snap.bar.has(cmd):
+			fail("bar missing %s" % cmd)
+			return
+		if str(snap.bar[cmd].owner) != str(expect[cmd]):
+			fail("%s routed to %s" % [cmd, snap.bar[cmd].owner])
+			return
+		if str(snap.bar[cmd].ability) == "":
+			fail("%s routed nowhere" % cmd)
+			return
+	if not _spend_ok(sim, "shield", "shield_wall"):
+		return
+	if sim.shield_wall_until <= sim.tick:
+		fail("shield did not cast")
+		return
+	sim._hero("raphael").hp = 120
+	sim.golden = 8000
+	if not _spend_ok(sim, "heal", "single_heal"):
+		return
+	if int(sim._hero("raphael").hp) <= 120:
+		fail("heal button did not mend raphael")
+		return
+	sim._hero("raphael").silence_until = sim.tick + 80
+	sim.golden = 8000
+	sim._hero("gabriel").cooldowns.erase("cleanse")
+	if not _spend_ok(sim, "cleanse", "cleanse", Balance.CLEANSE_BOUNTY):
+		return
+	if int(sim._hero("raphael").silence_until) > sim.tick:
+		fail("cleanse button did not route")
+		return
+	sim.golden = 8000
+	sim._hero("azrael").cooldowns.erase("detect_pulse")
+	if not _spend_ok(sim, "detect", "detect_pulse"):
+		return
+	sim._make_mob("heavy", "Heavy", sim._hero("azrael").pos, 400, 1, 99, 100, 0, [], "start:center")
+	var heavy := _find_subtype(sim, "heavy")
+	heavy.active_at = 0
+	sim.focus_id = int(heavy.id)
+	sim.focus_until = sim.tick + 100
+	sim.golden = 8000
+	sim._hero("azrael").cooldowns.erase("burst")
+	var routed := str(sim.preview("burst").ability)
+	if routed != "burst" or str(sim.preview("burst").owner) != "azrael":
+		fail("burst in range routed to %s" % routed)
+		return
+	if not _spend_ok(sim, "burst", "burst"):
+		return
+	sim._hurt(sim._hero("azrael"), 99999, "single", 0, false)
+	var beam := str(sim.preview("burst").ability)
+	if beam != "beam" or str(sim.preview("burst").owner) != "uriel":
+		fail("burst with azrael down routed to %s" % beam)
+
+
+func test_elixir_spend_cap_and_interaction_income() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var broke := Balance.cost("shield_wall") - 1
+	sim.golden = broke
+	sim.submit("shield", {})
+	sim.tick_once()
+	if sim.shield_wall_until > sim.tick:
+		fail("shield cast without elixir")
+		return
+	if sim.golden != broke + Balance.golden_regen(0):
+		fail("poor cast changed golden to %d" % sim.golden)
+		return
+	sim.golden = Balance.ELIXIR_MAX
+	sim.tick_once()
+	if sim.golden > Balance.ELIXIR_MAX:
+		fail("regen overflowed the cap")
+		return
+	var snap := sim.build_snapshot()
+	if int(snap.golden_regen) != Balance.golden_regen(0) or int(snap.dark_regen) != Balance.dark_regen(0):
+		fail("snapshot regen does not match the stage curve")
+		return
+	var room := sim.party_room()
+	var guard := 0
+	while int(sim.dark_income_room.get(room, 0)) < Balance.ROOM_DARK_DMG_CAP and guard < 80:
+		var raphael := sim._hero("raphael")
+		if not raphael.alive or int(raphael.hp) < 80:
+			raphael.alive = true
+			raphael.final_death = false
+			raphael.downed_until = 0
+			raphael.hp = raphael.hp_max
+		sim._hurt(raphael, 40, "single", 0, false)
+		guard += 1
+	if int(sim.dark_income_room.get(room, 0)) != Balance.ROOM_DARK_DMG_CAP:
+		fail("angel chip dark income %s" % str(sim.dark_income_room.get(room, 0)))
+		return
+	var dark_before := sim.dark
+	sim._hero("raphael").alive = true
+	sim._hero("raphael").hp = sim._hero("raphael").hp_max
+	sim._hurt(sim._hero("raphael"), 40, "single", 0, false)
+	if sim.dark != dark_before:
+		fail("dark income exceeded the room cap")
+		return
+	for _i in 20:
+		sim._grant_golden(Balance.AVOID_BOUNTY, "start")
+	if int(sim.golden_income_room.get("start", 0)) != Balance.ROOM_GOLDEN_CAP:
+		fail("golden bounty did not cap at %s" % str(sim.golden_income_room.get("start", 0)))
+		return
+	var id := sim._alloc()
+	var pos := sim.anchor + Vector2i(1600, 0)
+	sim.entities[id] = {
+		"id": id,
+		"team": "demon",
+		"kind": "trap",
+		"subtype": "spike",
+		"name": "spike",
+		"pos": pos,
+		"hp": 1,
+		"hp_max": 1,
+		"alive": true,
+		"armed": true,
+		"revealed": true,
+		"avoided": false,
+		"node": "fork:center",
+		"room": "fork",
+	}
+	sim.order.append(id)
+	sim.order.sort()
+	sim.tick_once()
+	if int(sim.golden_income_room.get("fork", 0)) != Balance.AVOID_BOUNTY:
+		fail("avoided trap paid %s" % str(sim.golden_income_room.get("fork", 0)))
+		return
+	sim.tick_once()
+	if int(sim.golden_income_room.get("fork", 0)) != Balance.AVOID_BOUNTY:
+		fail("avoided trap paid twice")
+
+
+func test_scene_touch_playable() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game._process(0.0)
+	game.board._process(0.0)
+	if game.hud._hp.size() != 5:
+		fail("expected 5 hp bars, got %d" % game.hud._hp.size())
+		game.queue_free()
+		return
+	var snap: Dictionary = game.board.snap
+	for subtype in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
+		var bar: ProgressBar = game.hud._hp[subtype]
+		var hs: Dictionary = snap.heroes[subtype]
+		if int(bar.max_value) != int(hs.hp_max) or int(bar.value) != int(hs.hp):
+			fail("hp bar %s shows %s/%s want %s/%s" % [subtype, bar.value, bar.max_value, hs.hp, hs.hp_max])
+			game.queue_free()
+			return
+		var rect: Rect2 = game.hud._portraits[subtype].get_rect()
+		if rect.size.y < 64 or rect.position.y + rect.size.y > 720:
+			fail("portrait %s is not a touch target %s" % [subtype, rect])
+			game.queue_free()
+			return
+	if int(game.hud._golden.value) != int(snap.golden) or int(game.hud._dark.value) != int(snap.dark):
+		fail("elixir bars do not match the sim")
+		game.queue_free()
+		return
+	if not str(game.hud._golden_l.text).contains("+") or not str(game.hud._dark_l.text).contains("Dark"):
+		fail("elixir labels missing regen")
+		game.queue_free()
+		return
+	for cmd in ["shield", "heal", "cleanse", "detect", "burst"]:
+		var btn: Button = game.hud._bar[cmd]
+		var r: Rect2 = btn.get_rect()
+		if r.size.x < 64 or r.size.y < 64:
+			fail("%s touch target %s" % [cmd, r.size])
+			game.queue_free()
+			return
+		if r.position.x < 0 or r.position.y < 0 or r.position.x + r.size.x > 1280 or r.position.y + r.size.y > 720:
+			fail("%s sits outside 1280x720 %s" % [cmd, r])
+			game.queue_free()
+			return
+	game.sim.golden = 8000
+	game.hud._bar.shield.pressed.emit()
+	game.sim.tick_once()
+	if game.sim.shield_wall_until <= game.sim.tick or game.sim.golden >= 8000:
+		fail("shield tap did not spend golden in the sim")
+		game.queue_free()
+		return
+	game.sim._make_mob("imp", "Imp", game.sim.anchor + Vector2i(700, 0), 80, 1, 50, 100, 0, [], "start:center")
+	for id in game.sim.order:
+		var foe: Dictionary = game.sim.entities[id]
+		if str(foe.subtype) == "imp":
+			foe.active_at = 0
+	game._process(0.0)
+	game.board._process(0.0)
+	var foe_snap: Dictionary = {}
+	for row in game.board.snap.foes:
+		if str(row.subtype) == "imp":
+			foe_snap = row
+	if foe_snap.is_empty():
+		fail("spawned imp was not on the board")
+		game.queue_free()
+		return
+	var touch := InputEventScreenTouch.new()
+	touch.pressed = true
+	touch.index = 0
+	touch.position = game.board._milli_screen(foe_snap.pos)
+	var queued := game.sim.queue.size()
+	game._unhandled_input(touch)
+	if game.sim.queue.size() <= queued or str(game.sim.queue.back().type) != "focus":
+		fail("tap-to-focus did not submit at %s board %s" % [touch.position, game.board.size])
+		game.queue_free()
+		return
+	game._tap_frame = -1
+	var tile := Fixed.tile_of(game.sim.anchor) + Vector2i(3, 0)
+	if game.sim.map.at(tile) < 0:
+		tile = Fixed.tile_of(game.sim.anchor) + Vector2i(0, 2)
+	var move := InputEventScreenTouch.new()
+	move.pressed = true
+	move.index = 1
+	move.position = game.board._milli_screen(Fixed.tile_center(tile))
+	queued = game.sim.queue.size()
+	game._unhandled_input(move)
+	if game.sim.queue.size() <= queued:
+		fail("tap-to-move did not submit")
+		game.queue_free()
+		return
+	var moved: Dictionary = game.sim.queue.back()
+	if str(moved.type) != "move_tile" and str(moved.type) != "move_room":
+		fail("ground tap submitted %s" % moved.type)
+		game.queue_free()
+		return
+	game.sim._hurt(game.sim._hero("azrael"), 99999, "single", 0, false)
+	game._process(0.0)
+	game.board._process(0.0)
+	if not str(game.hud._portraits.azrael.text).contains("DOWN"):
+		fail("downed portrait read %s" % game.hud._portraits.azrael.text)
+		game.queue_free()
+		return
+	if str(game.hud._portraits.michael.text).contains("DOWN"):
+		fail("michael portrait showed the wrong angel down")
+	game.queue_free()
+
+
+func _pin_screen(node: Control) -> void:
+	node.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	node.position = Vector2.ZERO
+	node.size = Vector2(1280, 720)
+
+
+func _spend_ok(sim: CombatSim, cmd: String, ability: String, bounty: int = 0) -> bool:
+	var before := sim.golden
+	var regen := Balance.golden_regen(0)
+	sim.submit(cmd, {})
+	sim.tick_once()
+	var expect := before - Balance.cost(ability) + regen + bounty
+	if sim.golden != expect:
+		fail("%s spent to %d, want %d" % [cmd, sim.golden, expect])
+		return false
+	return true
+
 
 
 func _fresh_trap(kind: String, node: String) -> CombatSim:
