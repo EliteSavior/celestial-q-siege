@@ -1,0 +1,92 @@
+name: Build Android APK
+
+# Builds an installable Android APK from the Godot 4 project and uploads it as a
+# workflow artifact. Does NOT create GitHub Releases (that comes later).
+#
+# Signing:
+#   - Default: debug-signed APK (uses the debug keystore baked into the
+#     barichello/godot-ci image). Installable via sideload.
+#   - If the repo secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_ALIAS and
+#     ANDROID_KEYSTORE_PASSWORD are all set, a release-signed APK is built instead.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in sync with the container image tag below and config/features in project.godot.
+  GODOT_VERSION: "4.7.2"
+  EXPORT_PRESET: "Android"
+  APK_NAME: "CelestialQSiege"
+
+jobs:
+  export-android:
+    name: Export Android APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    container:
+      # Maintained image: Godot headless + export templates + Android SDK/NDK + JDK 17.
+      # https://github.com/abarichello/godot-ci
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Godot config + export templates
+        # GitHub Actions sets HOME=/github/home inside containers, but the image
+        # installs editor settings and templates under /root. Copy them over.
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/ ~/.config/
+          cp -r /root/.config/godot ~/.config/godot
+          cp -r /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          godot --version
+          ls ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+
+      - name: Import project
+        # First headless run imports assets and builds the .godot/ cache.
+        run: godot --headless --verbose --import
+
+      - name: Export APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -v -p build
+          if [ -n "${KS_B64}" ] && [ -n "${KS_ALIAS}" ] && [ -n "${KS_PASS}" ]; then
+            echo "Release keystore secrets found -> release-signed export"
+            echo "${KS_B64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+            export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="${RUNNER_TEMP}/release.keystore"
+            export GODOT_ANDROID_KEYSTORE_RELEASE_USER="${KS_ALIAS}"
+            export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="${KS_PASS}"
+            OUT="build/${APK_NAME}-release.apk"
+            godot --headless --verbose --export-release "${EXPORT_PRESET}" "${OUT}"
+            rm -f "${RUNNER_TEMP}/release.keystore"
+          else
+            echo "No release keystore secrets -> debug-signed export"
+            OUT="build/${APK_NAME}-debug.apk"
+            godot --headless --verbose --export-debug "${EXPORT_PRESET}" "${OUT}"
+          fi
+          test -s "${OUT}" || { echo "::error::Export produced no APK at ${OUT}"; exit 1; }
+          ls -la build/
+          echo "APK_PATH=${OUT}" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: celestial-q-siege-apk-${{ github.sha }}
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 30

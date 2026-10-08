@@ -21,7 +21,8 @@ Design doc: see `docs/DESIGN.md` (rough draft v0.1; to be committed separately).
 | `Main.tscn` / `Main.gd` | Placeholder main scene: one full-screen label reading "Celestial Q Siege". |
 | `icon.svg` | Placeholder app/launcher icon. |
 | `export_presets.cfg` | One Android export preset named **`Android`** (used for both debug and release exports). |
-| `.github/workflows/build-apk.yml` | CI: exports the APK and uploads it as a workflow artifact. |
+| `scripts/build-apk.sh` | One-command APK build for a plain Linux box / Cursor cloud agent (downloads Godot, templates, JDK, Android SDK into a cache, then exports). |
+| `ci/github-actions/build-apk.yml` | GitHub Actions workflow (exports the APK, uploads it as an artifact). **Staged, not active yet** — see below. |
 
 ### Android export settings
 
@@ -31,9 +32,25 @@ Design doc: see `docs/DESIGN.md` (rough draft v0.1; to be committed separately).
 - Standard (non-Gradle) export using Godot's prebuilt Android templates — no custom Android build template needed
 - Min SDK 24 / target SDK 36 (Godot 4.7 defaults)
 
+## Building the APK (Cursor cloud agent / any Linux x86_64 box)
+
+```bash
+scripts/build-apk.sh          # -> build/CelestialQSiege-debug.apk (debug-signed, sideload-installable)
+scripts/build-apk.sh release  # needs GODOT_ANDROID_KEYSTORE_RELEASE_PATH / _USER / _PASSWORD
+```
+
+No root needed. First run downloads ~1.6 GB of tools into `~/.cache/cqs-godot-tools` (Godot 4.7.2, its Android
+export templates, Temurin JDK 17, Android cmdline-tools + build-tools 35.0.0) and writes Godot editor settings to
+`~/.config/godot/`. Later runs reuse the cache. The script finishes with `apksigner verify`.
+
 ## Build pipeline (GitHub Actions)
 
-The workflow `.github/workflows/build-apk.yml` runs on every push to `main`, on pull requests, and manually via
+> **Activation pending:** the workflow lives at `ci/github-actions/build-apk.yml` because the credentials used to
+> scaffold this repo lacked GitHub's `workflow` scope (GitHub rejects pushes to `.github/workflows/` without it).
+> To activate: move it to `.github/workflows/build-apk.yml` using credentials that have workflow permission
+> (GitHub web UI, `gh auth refresh -s workflow`, or a Cursor cloud agent).
+
+Once activated, the workflow runs on every push to `main`, on pull requests, and manually via
 **Actions → Build Android APK → Run workflow**.
 
 It runs inside the maintained [`barichello/godot-ci`](https://github.com/abarichello/godot-ci) Docker image
