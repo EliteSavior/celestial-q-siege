@@ -3511,7 +3511,8 @@ func test_iso_screen_tile_roundtrip() -> void:
 	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	game._process(0.0)
 	game.board._process(0.0)
-	var tile := Vector2i(24, 48)
+	# South of the squad. The room center is the anchor, so a tap there hits Raphael.
+	var tile := Vector2i(24, 50)
 	var milli := Fixed.tile_center(tile)
 	var screen: Vector2 = game.board._milli_screen(milli)
 	if not game.board.playfield_rect().has_point(screen):
@@ -3558,7 +3559,7 @@ func test_iso_screen_tile_roundtrip() -> void:
 		fail("round trip screen %s vs %s" % [again, known])
 		game.queue_free()
 		return
-	var outside := Vector2i(0, 46)
+	var outside := Vector2i(16, 48)
 	var out_milli := Fixed.tile_center(outside)
 	var out_iso: Vector2 = BoardView.iso_of_tile(float(out_milli.x) / 1000.0, float(out_milli.y) / 1000.0)
 	game.board.zoom = 1.0
