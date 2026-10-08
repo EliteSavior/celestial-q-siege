@@ -251,6 +251,7 @@ func tick_once() -> void:
 	_stakes()
 	_turtle()
 	_resolve_revives()
+	_tick_downed()
 	_clears()
 	_win_lose()
 	_prune_popups()
@@ -405,7 +406,7 @@ func _route(cmd: String) -> String:
 				return "body_block"
 			return "shield_wall"
 		"heal":
-			if _dead_count() > 0 and _lowest_living_pct() >= 70:
+			if _downed_count() > 0 and _lowest_living_pct() >= 70:
 				return "slow_revive"
 			if _below_pct(70) >= 2:
 				return "party_heal"
@@ -482,9 +483,9 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			_log("Raphael mends the party.", "good")
 			return true
 		"slow_revive":
-			var dead := _first_dead()
+			var dead := _revive_target()
 			if dead.is_empty():
-				_fail("No one is down.")
+				_fail("Death is final." if _has_final_corpse() else "No one is down.")
 				return false
 			owner.casting = {"ability": "slow_revive", "until": tick + 60, "target": dead.id}
 			_log("Raphael begins a resurrection.", "good")
@@ -549,11 +550,13 @@ func _apply_ability(ability: String, owner: Dictionary) -> bool:
 			_log("Gabriel shields himself.", "good")
 			return true
 		"emergency_res":
-			var dead2 := _first_dead()
+			var dead2 := _revive_target()
 			if dead2.is_empty():
-				_fail("No one is down.")
+				_fail("Death is final." if _has_final_corpse() else "No one is down.")
 				return false
-			_revive(dead2, 25)
+			if not _revive(dead2, 25):
+				_fail("Death is final.")
+				return false
 			_log("Gabriel forces %s back." % dead2.name, "good")
 			return true
 		_:
@@ -847,10 +850,14 @@ func node_occupied_by_trap(node: String) -> bool:
 
 # --- simulation steps -------------------------------------------------------
 
-func _regen() -> void:
-	var idx := mini(stage_reached, 3)
+func _regen_index() -> int:
 	if phase == "lucifer":
-		idx = 4
+		return 4
+	return mini(stage_reached, 3)
+
+
+func _regen() -> void:
+	var idx := _regen_index()
 	var g := Balance.golden_regen(idx)
 	var d := Balance.dark_regen(idx)
 	if corruption:
@@ -1175,8 +1182,10 @@ func _channels() -> void:
 				var dead := _ent(int(a.casting.target))
 				a.casting = {}
 				if not dead.is_empty() and not dead.alive:
-					_revive(dead, 40)
-					_log("%s stands again." % dead.name, "good")
+					if _revive(dead, 40):
+						_log("%s stands again." % dead.name, "good")
+					else:
+						_log("The resurrection comes too late.", "bad")
 
 
 func _zones_and_auras() -> void:
@@ -1462,8 +1471,10 @@ func _resolve_revives() -> void:
 			continue
 		var a := _ent(int(p.id))
 		if not a.is_empty() and not a.alive:
-			_revive(a, 50)
-			_log("The altar restores %s." % a.name, "good")
+			if _revive(a, 50):
+				_log("The altar restores %s." % a.name, "good")
+			else:
+				_log("The altar is too late for %s." % a.name, "bad")
 	pending_revives = keep
 
 
@@ -1503,7 +1514,8 @@ func _win_lose() -> void:
 		banner = "VICTORY"
 		_log("Lucifer falls. The siege breaks.", "good")
 		return
-	if _any_angel_coming_back():
+	# A downed angel is not a wipe yet. The 3s window is the decision.
+	if _any_angel_coming_back() or _downed_count() > 0:
 		return
 	var any := false
 	for a in _angels():
@@ -1583,7 +1595,9 @@ func _die(target: Dictionary) -> void:
 	if focus_id == int(target.id):
 		focus_id = 0
 	if str(target.team) == "angel":
-		_log("%s falls." % target.name, "bad")
+		target.final_death = false
+		target.downed_until = tick + Balance.DOWNED_TICKS
+		_log("%s is down. %0.0fs to reach them." % [target.name, float(Balance.DOWNED_TICKS) / float(Balance.TICK_HZ)], "bad")
 		if revive_charges > 0:
 			revive_charges -= 1
 			pending_revives.append({"id": target.id, "at": tick + Balance.ALTAR_REVIVE_DELAY})
@@ -1612,7 +1626,9 @@ func _heal(target: Dictionary, amount: int) -> void:
 	_popup(target.pos, "+%s" % amount, "good")
 
 
-func _revive(target: Dictionary, pct: int) -> void:
+func _revive(target: Dictionary, pct: int) -> bool:
+	if target.is_empty() or bool(target.get("final_death", false)):
+		return false
 	target.alive = true
 	target.hp = maxi(1, int(target.hp_max) * pct / 100)
 	target.pos = _clamp_pos(anchor)
@@ -1621,7 +1637,31 @@ func _revive(target: Dictionary, pct: int) -> void:
 	target.mark_until = 0
 	target.shield = 0
 	target.casting = {}
+	target.downed_until = 0
+	target.final_death = false
 	stats.revives += 1
+	return true
+
+
+func _tick_downed() -> void:
+	var held := {}
+	for a in _angels():
+		if a.casting.is_empty():
+			continue
+		if str(a.casting.get("ability", "")) != "slow_revive":
+			continue
+		held[int(a.casting.get("target", -1))] = true
+	for a in _angels():
+		if a.alive or bool(a.get("final_death", false)):
+			continue
+		# A slow revive already in the cast holds the window open until it lands or breaks.
+		if held.has(int(a.id)):
+			if tick >= int(a.get("downed_until", 0)):
+				a.downed_until = tick + 1
+			continue
+		if tick >= int(a.get("downed_until", 0)):
+			a.final_death = true
+			_log("%s's death is final." % a.name, "bad")
 
 
 func _interrupt_revive(owner: Dictionary) -> void:
@@ -1835,6 +1875,7 @@ func build_snapshot() -> Dictionary:
 	var hero_state := {}
 	for subtype in _KIT.keys():
 		var a := _hero(str(subtype))
+		var downed: bool = not a.alive and not bool(a.get("final_death", false))
 		hero_state[subtype] = {
 			"id": a.id,
 			"alive": a.alive,
@@ -1846,6 +1887,9 @@ func build_snapshot() -> Dictionary:
 			"mark": int(a.mark_until) > tick,
 			"radiance": int(a.get("radiance", 0)),
 			"casting": str(a.casting.get("ability", "")),
+			"downed": downed,
+			"downed_left": maxi(0, int(a.get("downed_until", 0)) - tick) if downed else 0,
+			"final_death": bool(a.get("final_death", false)),
 		}
 	var abilities := {}
 	for subtype in _KIT.keys():
@@ -1913,6 +1957,9 @@ func build_snapshot() -> Dictionary:
 		"boss_hp_max": _boss_hp_max(),
 		"channeling": channeling_altar,
 		"party_hp_pct": party_hp_pct(),
+		"golden_regen": Balance.golden_regen(_regen_index()),
+		"dark_regen": Balance.dark_regen(_regen_index()),
+		"downed_ticks": Balance.DOWNED_TICKS,
 	}
 
 
@@ -1935,13 +1982,16 @@ func checksum() -> int:
 		h = Fixed.mix(h, int(e.pos.x))
 		h = Fixed.mix(h, int(e.pos.y))
 		h = Fixed.mix(h, 1 if e.alive else 0)
+		h = Fixed.mix(h, 1 if bool(e.get("final_death", false)) else 0)
+		h = Fixed.mix(h, int(e.get("downed_until", 0)))
 	return h
 
 
 func debug_string() -> String:
 	var hp := []
 	for a in _angels():
-		hp.append("%s:%s/%s" % [a.subtype, a.hp if a.alive else "dead", a.hp_max])
+		var tag := str(a.hp) if a.alive else ("down" if not bool(a.get("final_death", false)) else "final")
+		hp.append("%s:%s/%s" % [a.subtype, tag, a.hp_max])
 	return "t=%d room=%s st=%d clr=%d g=%d d=%d phase=%s mobs=%d out=%s seal=%s font=%s altar=%s [%s]" % [
 		tick, party_room_id, stage_reached, rooms_cleared, golden, dark, phase, mob_count(), outcome,
 		seal_done, font_done, altar_done, ", ".join(hp)
@@ -1981,6 +2031,8 @@ func _spawn_heroes() -> void:
 			"radiance": 0,
 			"phalanx": 0,
 			"room": "start",
+			"downed_until": 0,
+			"final_death": false,
 		}
 		order.append(id)
 
@@ -2119,11 +2171,30 @@ func _lowest_living() -> Dictionary:
 	return best
 
 
-func _first_dead() -> Dictionary:
+func _revive_target() -> Dictionary:
 	for a in _angels():
-		if not a.alive:
+		if not a.alive and not bool(a.get("final_death", false)):
 			return a
 	return {}
+
+
+func _first_dead() -> Dictionary:
+	return _revive_target()
+
+
+func _downed_count() -> int:
+	var n := 0
+	for a in _angels():
+		if not a.alive and not bool(a.get("final_death", false)):
+			n += 1
+	return n
+
+
+func _has_final_corpse() -> bool:
+	for a in _angels():
+		if not a.alive and bool(a.get("final_death", false)):
+			return true
+	return false
 
 
 func _dead_count() -> int:
@@ -2442,6 +2513,9 @@ func _copy_unit(e: Dictionary) -> Dictionary:
 		"silence": int(e.get("silence_until", 0)) > tick,
 		"rot": int(e.get("rot_until", 0)) > tick,
 		"radiance": int(e.get("radiance", 0)),
+		"downed": not bool(e.alive) and not bool(e.get("final_death", false)) and str(e.kind) == "angel",
+		"downed_left": maxi(0, int(e.get("downed_until", 0)) - tick) if (not bool(e.alive) and not bool(e.get("final_death", false))) else 0,
+		"final_death": bool(e.get("final_death", false)),
 	}
 
 

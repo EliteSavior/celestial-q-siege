@@ -141,7 +141,15 @@ func _draw() -> void:
 			draw_circle(_milli_screen(foe.blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
 	for angel in snap.angels:
 		if not bool(angel.alive):
-			_draw_unit(angel, Color(0.25, 0.25, 0.28), font, false)
+			var fallen := Color(0.25, 0.25, 0.28)
+			_draw_unit(angel, fallen, font, false)
+			if bool(angel.get("downed", false)):
+				var p_down := _milli_screen(angel.pos)
+				var left := int(angel.get("downed_left", 0))
+				var frac := float(left) / float(maxi(int(snap.get("downed_ticks", 60)), 1))
+				draw_arc(p_down, 18.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 24, Color(1.0, 0.45, 0.18), 3.0)
+				if font:
+					draw_string(font, p_down + Vector2(-12, 28), "%0.1f" % (float(left) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.62, 0.3))
 			continue
 		var col: Color = HERO_COLOR.get(str(angel.subtype), Color.WHITE)
 		if int(angel.id) == int(snap.focus_id):

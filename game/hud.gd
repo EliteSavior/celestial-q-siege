@@ -4,6 +4,7 @@ extends Control
 var game
 var _built := false
 var _portraits := {}
+var _hp := {}
 var _bar := {}
 var _stances := {}
 var _scatter: Button
@@ -44,8 +45,8 @@ func build() -> void:
 	_boss = _bar_at(Vector2(210, 78), 520, Color(0.75, 0.12, 0.12))
 	_boss.visible = false
 	_boss_l = _label(Vector2(740, 76), "", 14)
-	_feed = _label(Vector2(520, 588), "", 14)
-	_feed.size = Vector2(520, 48)
+	_feed = _label(Vector2(210, 552), "", 14)
+	_feed.size = Vector2(520, 60)
 	_pause = _btn("Pause", Vector2(1060, 8), Vector2(90, 36), _on_pause)
 	_speed = _btn("1x", Vector2(1160, 8), Vector2(70, 36), _on_speed)
 	var names := ["Tight", "Spread", "Column"]
@@ -57,7 +58,7 @@ func build() -> void:
 	_phalanx = _btn("Phalanx", Vector2(628, 640), Vector2(100, 48), _on_phalanx)
 	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
 	for i in cmds.size():
-		var b2 := _btn(cmds[i].capitalize(), Vector2(760 + i * 100, 632), Vector2(96, 64), _on_cmd.bind(cmds[i]))
+		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
 	_build_portraits()
 	_build_brief()
@@ -72,8 +73,10 @@ func refresh(snap: Dictionary) -> void:
 	_dark.max_value = max_e
 	_golden.value = float(snap.golden)
 	_dark.value = float(snap.dark)
-	_golden_l.text = "Golden  %0.1f" % (float(snap.golden) / 1000.0)
-	_dark_l.text = "Dark  %0.1f" % (float(snap.dark) / 1000.0)
+	var g_rate := float(snap.get("golden_regen", 0)) * float(Balance.TICK_HZ) / 1000.0
+	var d_rate := float(snap.get("dark_regen", 0)) * float(Balance.TICK_HZ) / 1000.0
+	_golden_l.text = "Golden  %0.1f/%0.0f  +%0.2f/s" % [float(snap.golden) / 1000.0, max_e / 1000.0, g_rate]
+	_dark_l.text = "Dark  %0.1f/%0.0f  +%0.2f/s" % [float(snap.dark) / 1000.0, max_e / 1000.0, d_rate]
 	var secs := int(snap.tick) / 20
 	_clock.text = "%d:%02d" % [secs / 60, secs % 60]
 	var room := str(snap.party_room)
@@ -139,6 +142,7 @@ func refresh(snap: Dictionary) -> void:
 	for subtype in _portraits.keys():
 		var hs: Dictionary = snap.heroes[subtype]
 		var btn3: Button = _portraits[subtype]
+		var bar: ProgressBar = _hp[subtype]
 		var flags := ""
 		if bool(hs.silence):
 			flags += " SIL"
@@ -146,11 +150,32 @@ func refresh(snap: Dictionary) -> void:
 			flags += " ROT"
 		if bool(hs.mark):
 			flags += " MARK"
-		if not bool(hs.alive):
-			btn3.text = "%s\nDOWN" % subtype.capitalize()
+		if int(hs.get("shield", 0)) > 0:
+			flags += " +%d" % int(hs.shield)
+		if bool(hs.get("downed", false)):
+			bar.max_value = float(maxi(int(snap.get("downed_ticks", 60)), 1))
+			bar.value = float(int(hs.get("downed_left", 0)))
+			_paint(bar, Color(0.95, 0.48, 0.16))
+			btn3.text = "%s\nDOWN %0.1fs%s" % [subtype.capitalize(), float(hs.get("downed_left", 0)) / 20.0, flags]
+			btn3.modulate = Color(1.0, 0.78, 0.5)
+		elif bool(hs.get("final_death", false)) or not bool(hs.alive):
+			bar.max_value = float(maxi(int(hs.hp_max), 1))
+			bar.value = 0
+			_paint(bar, Color(0.28, 0.24, 0.24))
+			btn3.text = "%s\nFALLEN" % subtype.capitalize()
+			btn3.modulate = Color(0.45, 0.45, 0.45)
 		else:
+			var pct := int(hs.hp) * 100 / maxi(int(hs.hp_max), 1)
+			var col := Color(0.35, 0.78, 0.42)
+			if pct < 50:
+				col = Color(0.86, 0.72, 0.28)
+			if pct < 25:
+				col = Color(0.86, 0.28, 0.22)
+			bar.max_value = float(maxi(int(hs.hp_max), 1))
+			bar.value = float(maxi(int(hs.hp), 0))
+			_paint(bar, col)
 			btn3.text = "%s\n%d%s" % [subtype.capitalize(), int(hs.hp), flags]
-		btn3.modulate = Color(1, 1, 1) if bool(hs.alive) else Color(0.45, 0.45, 0.45)
+			btn3.modulate = Color(1, 1, 1)
 	if str(snap.outcome) != "":
 		_end.visible = true
 		var secs2 := int(snap.tick) / 20
@@ -174,11 +199,17 @@ func _build_portraits() -> void:
 		"gabriel": Color(0.4, 0.34, 0.14),
 	}
 	for i in order.size():
-		var b := _btn(order[i].capitalize(), Vector2(8, 8 + i * 86), Vector2(180, 78), _on_portrait.bind(order[i]))
+		var b := _btn(order[i].capitalize(), Vector2(8, 8 + i * 96), Vector2(188, 90), _on_portrait.bind(order[i]))
 		var sb := b.get_theme_stylebox("normal").duplicate()
 		sb.bg_color = colors[order[i]]
 		b.add_theme_stylebox_override("normal", sb)
+		var hover := b.get_theme_stylebox("hover")
+		if hover:
+			hover = hover.duplicate()
+			hover.bg_color = colors[order[i]].lightened(0.15)
+			b.add_theme_stylebox_override("hover", hover)
 		_portraits[order[i]] = b
+		_hp[order[i]] = _hp_bar(b, Vector2(10, 64), Vector2(168, 16))
 
 
 func _build_brief() -> void:
@@ -188,7 +219,7 @@ func _build_brief() -> void:
 	_brief.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_brief)
 	var l := Label.new()
-	l.text = "Celestial Q Siege\n\nFive angels, one squad. Tap the ground or a doorway. A doorway commits you for 3 seconds.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. The seal locks out swarms. The font banks a cleanse. The altar banks a revive.\nElixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nStance is the standing bet: Tight, Spread, or Column.\nScatter Roll and Phalanx Push are the reactions. Tap an enemy to focus.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
+	l.text = "Celestial Q Siege\n\nFive angels, one squad. Each portrait is that angel's health. Tap the ground to move, a doorway to commit for 3 seconds, an enemy to focus.\n\nAttacks happen on their own. The five buttons spend Golden Elixir and route to the angel who owns them: Shield, Heal, Cleanse, Detect, Burst.\nA downed angel has 3 seconds before the death is final. Heal, an emergency rite, or an altar charge can still reach them.\n\nThree stages. Each fork differs: still air (traps), skittering (summons), whispers (curses).\nEach stage has a stake. Elixir starts poor and compounds as you push. Idling in a cleared room feeds the demon.\n\nThen the throne. Lucifer is the bill for the siege, not the whole of it."
 	l.position = Vector2(180, 70)
 	l.size = Vector2(920, 460)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -300,6 +331,9 @@ func _apply_ability_button(btn: Button, info: Dictionary) -> void:
 		extra = "\n%0.1fs" % (float(cd) / 20.0)
 	elif cost > 0.0:
 		extra = "\n%0.0f" % cost
+	var owner := str(info.get("owner", "")).capitalize()
+	if owner != "":
+		extra += "\n" + owner
 	btn.text = "%s%s" % [info.label, extra]
 	btn.disabled = not bool(info.ready)
 
@@ -314,6 +348,30 @@ func _cd(ticks: int) -> String:
 	if ticks <= 0:
 		return "ready"
 	return "%0.1fs" % (float(ticks) / 20.0)
+
+
+func _paint(bar: ProgressBar, color: Color) -> void:
+	var fill := bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if fill:
+		fill.bg_color = color
+
+
+func _hp_bar(parent: Control, at: Vector2, sz: Vector2) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.position = at
+	bar.size = sz
+	bar.custom_minimum_size = sz
+	bar.show_percentage = false
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.max_value = 100
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(0.35, 0.78, 0.42)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.05, 0.04, 0.07)
+	bar.add_theme_stylebox_override("fill", fill)
+	bar.add_theme_stylebox_override("background", bg)
+	parent.add_child(bar)
+	return bar
 
 
 func _bar_at(at: Vector2, width: float, color: Color) -> ProgressBar:

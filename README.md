@@ -4,7 +4,7 @@ Touch-first, real-time **asymmetric strategy-RPG** for Android. One side is a pa
 
 Built with **Godot 4.7**. Distributed as a sideloadable APK.
 
-> **Status: M1 (the siege has a length).** Three stages, three forks whose branches differ, a stake in each stage, and elixir that compounds from a poor opening to a Lucifer peak. A scripted competent party reaches the throne in about 8.6 minutes and wins the fight in about 2, for a ~10.6 minute run. Placeholder shapes, not final art. No networking yet: the sim already takes commands from either side, so a human demon can be a transport layer later.
+> **Status: M2 (combat core).** Per-angel health, a 3-second downed window, auto-attack, and a touch scene on top of the same deterministic sim. Twin elixir bars show the live banks and the stage regen. One command bar spends Golden Elixir. A scripted competent party still reaches the throne in about 8.6 minutes and wins in about 10.6. Placeholder shapes, not final art. No networking yet: every action, angel or demon, goes through `submit()`.
 
 ---
 
@@ -16,7 +16,8 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 | --- | --- |
 | Tap ground | Move the squad (deterministic path). |
 | Tap a doorway | Commit to that branch for 3 seconds. |
-| Tap an enemy | Focus fire. There is no target-priority toggle. |
+| Tap an enemy | Focus fire. Attacks themselves are automatic. |
+| Portrait | That angel's HP. DOWN counts 3 seconds, then the death is final. |
 | Tap the altar node | Channel the revive charge (the altar is in the demon's strongest room). |
 | Shield / Heal / Cleanse / Detect / Burst | Contextual commands. Each routes to the angel who owns it. |
 | Tap a portrait | Show that angel's three actives. Back returns to the shared bar. |
@@ -25,6 +26,8 @@ Open the project in Godot 4.7.2 and run `Main.tscn` (landscape, 1280×720). A br
 | 1–5, Z, X, Q/W/E | Same commands from a keyboard. |
 | 1x button | Cycle lab speed 1x / 2x / 3x. |
 | Space | Pause. R restarts after the outcome panel. |
+
+Combat is the sim, not the scene. Angels and demons auto-attack anything in range. Shield, Heal, Cleanse, Detect, and Burst are the only angel buttons; each one routes to the owner and spends Golden Elixir. There is no hand of cards. A lethal hit downs that angel for 3 seconds (the portrait and a ring on the board count it down). Emergency resurrection, Raphael's slow revive, or a banked altar charge can still reach them. When the window closes, the death is final and a full party of final deaths is a wipe. Golden comes from playing (a trap avoided, a cleanse, a kill), Dark from chipping angels, both capped per room. Neither bar drips extra to the side that is behind.
 
 Fog shows the current room and the next doorway. Traps stay hidden until Azrael's detect aura, a Detect pulse, or the lead angel steps on the tile. Curses show a cast bar before they land. Summons are visible when they spawn.
 
@@ -81,7 +84,7 @@ godot --headless --path . --script res://tests/run_tests.gd
 ### Android export settings
 
 - Package name: `me.elitesavior.celestialqsiege`
-- App name: `Celestial Q Siege`, version `0.2.0` (versionCode `3`)
+- App name: `Celestial Q Siege`, version `0.3.0` (versionCode `4`)
 - Architectures: `arm64-v8a` + `armeabi-v7a`
 - Standard (non-Gradle) export. Min SDK 24 / target SDK 36.
 
@@ -118,7 +121,8 @@ CI uses [`barichello/godot-ci:4.7.2`](https://github.com/abarichello/godot-ci). 
 - The director still fills the Dark bank on the long marches, so the echo wave is often the capped one. Spending it down is future tuning.
 - The Gate Seal locks swarm summons. The Cleansing Font stores one auto-cleanse. The altar is still the revive.
 - Uriel's beam tracks the focus target. Finger-steering is deferred.
-- The altar charge auto-spends on the next death (short delay, half health). It does not rewind a death.
+- The altar charge auto-spends on the next death (short delay, half health) and lands inside the 3-second downed window. It does not rewind a death that has already gone final.
+- A slow revive already being cast holds the downed window open until the cast lands or is interrupted.
 - Column eats spikes on the lead angel and suffers longer snares.
 - Purifying shrines from the design's section 19 are not in this build.
 - Gabriel's kit is cleanse, self-shield, emergency res, plus an always-on party damage aura. The active damage buff was dropped to keep three actives.
