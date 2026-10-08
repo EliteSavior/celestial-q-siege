@@ -50,6 +50,7 @@ var seq := 0
 
 var golden := Balance.GOLDEN_START
 var dark := Balance.DARK_START
+var angel_acted := false
 var stance := STANCE_TIGHT
 var facing := Vector2i(1, 0)
 var anchor := Vector2i.ZERO
@@ -150,6 +151,7 @@ func reset() -> void:
 	seq = 0
 	golden = Balance.GOLDEN_START
 	dark = Balance.DARK_START
+	angel_acted = false
 	stance = STANCE_TIGHT
 	facing = Vector2i(1, 0)
 	anchor = Fixed.tile_center(map.center_tile("start"))
@@ -285,7 +287,19 @@ func _drain_commands() -> void:
 		_exec(c)
 
 
+func opening_grace() -> bool:
+	return not angel_acted and tick <= Balance.OPENING_GRACE_TICKS
+
+
+func grace_left() -> int:
+	if not opening_grace():
+		return 0
+	return maxi(0, Balance.OPENING_GRACE_TICKS - tick)
+
+
 func _exec(c: Dictionary) -> void:
+	if str(c.get("who", "")) == "angel":
+		angel_acted = true
 	var type := str(c.type)
 	var args: Dictionary = c.args
 	match type:
@@ -1254,7 +1268,9 @@ func _regen() -> void:
 	var idx := _regen_index()
 	var g := Balance.golden_regen(idx)
 	var d := Balance.dark_regen(idx)
-	if corruption:
+	if opening_grace():
+		d = 0
+	elif corruption:
 		d += Balance.TURTLE_DARK_PER_TICK
 	golden = mini(Balance.ELIXIR_MAX, golden + g)
 	dark = mini(Balance.ELIXIR_MAX, dark + d)
@@ -1295,6 +1311,8 @@ func _movement() -> void:
 
 
 func _idle_tick() -> void:
+	if opening_grace():
+		return
 	if phase == "lucifer" or channeling_altar:
 		idle_ticks = 0
 		return
@@ -2406,7 +2424,9 @@ func build_snapshot() -> Dictionary:
 		"channeling": channeling_altar,
 		"party_hp_pct": party_hp_pct(),
 		"golden_regen": Balance.golden_regen(_regen_index()),
-		"dark_regen": Balance.dark_regen(_regen_index()),
+		"dark_regen": 0 if opening_grace() else Balance.dark_regen(_regen_index()),
+		"opening_grace": opening_grace(),
+		"grace_left": grace_left(),
 		"downed_ticks": Balance.DOWNED_TICKS,
 	}
 
