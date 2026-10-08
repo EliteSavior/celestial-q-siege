@@ -1,10 +1,16 @@
 extends Control
+class_name BoardView
 ## Reads a fogged snapshot plus the static map. Never writes sim state.
+## Fixed 2:1 dimetric view. Screen position is derived from tiles and never fed back.
 
-const TILE := 48.0
+const TILE_W := 64.0
+const TILE_H := 32.0
 const INSET_L := 196.0
 const INSET_T := 112.0
 const INSET_B := 236.0
+const INSET_R := 8.0
+const NARROW_W := 1200.0
+const NARROW_INSET_B := 308.0
 
 const TELL_COLOR := {
 	"silence": Color(0.38, 0.66, 1.0),
@@ -59,6 +65,7 @@ const HERO_COLOR := {
 var game
 var snap: Dictionary = {}
 var cam := Vector2.ZERO
+var zoom := 1.0
 var cam_ready := false
 
 
@@ -70,10 +77,9 @@ func _ready() -> void:
 func handle_tap(screen: Vector2) -> void:
 	if snap.is_empty() or game == null:
 		return
-	var world := _screen_to_world(screen)
-	if world.x < INSET_L or world.y < INSET_T or world.y > size.y - INSET_B:
+	if not playfield_rect().has_point(screen):
 		return
-	var milli := _world_to_milli(world)
+	var milli := _screen_to_milli(screen)
 	if bool(snap.get("beam_on", false)):
 		game.command("steer", {"pos": milli})
 		return
@@ -106,27 +112,32 @@ func handle_tap(screen: Vector2) -> void:
 	if not best.is_empty():
 		game.command("move_room", {"room": str(best.dest)})
 		return
-	var tile := Fixed.tile_of(milli)
-	if game.sim.map.at(tile) >= 0:
+	var tile := _nearest_walkable(milli)
+	if tile.x >= 0:
 		game.command("move_tile", {"tile": tile})
 
 
 func handle_drag(screen: Vector2) -> void:
 	if snap.is_empty() or game == null or not bool(snap.get("beam_on", false)):
 		return
-	if screen.x < INSET_L or screen.y < INSET_T or screen.y > size.y - INSET_B:
+	if not playfield_rect().has_point(screen):
 		return
-	game.command("steer", {"pos": _world_to_milli(screen)})
+	game.command("steer", {"pos": _screen_to_milli(screen)})
 
 
 func _process(_delta: float) -> void:
-	if snap.is_empty():
+	if snap.is_empty() or game == null:
 		return
-	var anchor: Vector2i = snap.anchor
-	var target := _milli_to_world(anchor) - Vector2(INSET_L, INSET_T)
-	target += Vector2(INSET_L, INSET_T)
+	var rect := _focus_rect()
+	var bounds := _iso_bounds(rect)
 	var view := _view_size()
-	var desired := _milli_to_local_unoffset(anchor) - view * 0.5
+	var fit := minf(view.x / maxf(bounds.size.x, 1.0), view.y / maxf(bounds.size.y, 1.0))
+	zoom = clampf(fit / 1.12, 0.35, 1.45)
+	var span := view / zoom
+	var iso := _iso_milli(snap.anchor)
+	var desired := iso - span * 0.5
+	desired.x = _clamp_cam(desired.x, bounds.position.x, bounds.end.x, span.x)
+	desired.y = _clamp_cam(desired.y, bounds.position.y, bounds.end.y, span.y)
 	if not cam_ready:
 		cam = desired
 		cam_ready = true
@@ -139,7 +150,7 @@ func _draw() -> void:
 	if snap.is_empty() or game == null:
 		return
 	var font := ThemeDB.fallback_font
-	var view_pos := Vector2(INSET_L, INSET_T)
+	var view_pos := _view_origin()
 	var view_size := _view_size()
 	RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(view_pos, view_size))
 	draw_rect(Rect2(view_pos, view_size), Color(0.03, 0.03, 0.05))
@@ -147,48 +158,61 @@ func _draw() -> void:
 	var vis := {}
 	for id in snap.visible:
 		vis[str(id)] = true
-	var x0 := int(cam.x / TILE) - 1
-	var y0 := int(cam.y / TILE) - 1
-	var x1 := int((cam.x + view_size.x) / TILE) + 2
-	var y1 := int((cam.y + view_size.y) / TILE) + 2
-	for ty in range(maxi(y0, 0), mini(y1, map.height)):
-		for tx in range(maxi(x0, 0), mini(x1, map.width)):
+	var cells: Array[Vector2i] = []
+	var cull := _cull_rect()
+	var y_from := maxi(cull.position.y, 0)
+	var y_to := mini(cull.position.y + cull.size.y, map.height)
+	var x_from := maxi(cull.position.x, 0)
+	var x_to := mini(cull.position.x + cull.size.x, map.width)
+	for ty in range(y_from, y_to):
+		for tx in range(x_from, x_to):
 			var ri: int = int(map.at(Vector2i(tx, ty)))
 			if ri < 0:
 				continue
 			var room: Dictionary = map.rooms[ri]
 			if not vis.has(str(room.id)):
 				continue
-			var p := _tile_screen(tx, ty)
-			var here := str(room.id) == str(snap.party_room)
-			var col := _room_color(str(room.kind), here)
-			draw_rect(Rect2(p, Vector2(TILE - 1, TILE - 1)), col)
-			_draw_fog_edge(tx, ty, vis, map, p)
-	for room in map.rooms:
-		if room.corridor or not vis.has(str(room.id)):
+			cells.append(Vector2i(tx, ty))
+	cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var da := a.x + a.y
+		var db := b.x + b.y
+		if da != db:
+			return da < db
+		return a.x < b.x
+	)
+	for cell in cells:
+		var ri2: int = int(map.at(cell))
+		var room2: Dictionary = map.rooms[ri2]
+		var center := _tile_center_screen(cell.x, cell.y)
+		var here := str(room2.id) == str(snap.party_room)
+		_draw_tile_diamond(center, _room_color(str(room2.kind), here), 0.86)
+		_draw_fog_edge(cell.x, cell.y, vis, map, center)
+	for ex in snap.exits:
+		var door: Vector2i = ex.tile
+		var hc: Color = HINT_COLOR.get(str(ex.hint), Color(1.0, 0.92, 0.7))
+		_draw_tile_diamond(_tile_center_screen(door.x, door.y), Color(hc.r, hc.g, hc.b, 0.42), 0.98)
+	for room3 in map.rooms:
+		if room3.corridor or not vis.has(str(room3.id)):
 			continue
-		for node_name in room.nodes.keys():
-			var t: Vector2i = room.nodes[node_name]
-			var c := _tile_screen(t.x, t.y) + Vector2(TILE * 0.5, TILE * 0.5)
-			var stake_node := str(room.kind) in ["altar", "seal", "font"] and str(node_name) == "rear"
+		for node_name in room3.nodes.keys():
+			var t: Vector2i = room3.nodes[node_name]
+			var c := _tile_center_screen(t.x, t.y)
+			var stake_node := str(room3.kind) in ["altar", "seal", "font"] and str(node_name) == "rear"
 			if stake_node:
-				var diamond := PackedVector2Array([
-					c + Vector2(0, -14), c + Vector2(12, 0), c + Vector2(0, 14), c + Vector2(-12, 0),
-				])
-				draw_colored_polygon(diamond, Color(0.98, 0.78, 0.22, 0.95))
+				_draw_tile_diamond(c, Color(0.98, 0.78, 0.22, 0.95), 0.46)
 				if font:
-					_plaque(font, c + Vector2(-28, -18), "STAKE", Color(0.15, 0.1, 0.02), Color(0.98, 0.82, 0.3), 13)
+					_plaque(font, c + Vector2(-28, -22), "STAKE", Color(0.15, 0.1, 0.02), Color(0.98, 0.82, 0.3), 13)
 			else:
-				draw_circle(c, 5, Color(0.7, 0.64, 0.5, 0.45))
+				_draw_tile_diamond(c, Color(0.7, 0.64, 0.5, 0.55), 0.16)
 	if snap.path is Array:
 		var prev := _milli_screen(snap.anchor)
 		for tile in snap.path:
-			var p2 := _tile_screen(tile.x, tile.y) + Vector2(TILE * 0.5, TILE * 0.5)
-			draw_line(prev, p2, Color(0.95, 0.9, 0.6, 0.45), 2.0)
+			var p2 := _tile_center_screen(tile.x, tile.y)
+			draw_line(prev, p2, Color(0.95, 0.9, 0.6, 0.55), 2.0)
 			prev = p2
 	for zone in snap.zones:
 		var colz := Color(0.95, 0.35, 0.12, 0.28) if str(zone.subtype) == "hell" else Color(0.95, 0.85, 0.4, 0.28)
-		draw_circle(_milli_screen(zone.pos), float(zone.radius) / 1000.0 * TILE, colz)
+		_draw_world_disk(zone.pos, float(zone.radius), colz)
 	for commit in snap.get("commitments", []):
 		var cp := _milli_screen(commit.pos)
 		var total := maxi(Balance.COMMIT_CAST, 1)
@@ -214,63 +238,25 @@ func _draw() -> void:
 		if font:
 			var who := str(curse.get("name", ""))
 			_plaque(font, cpos + Vector2(-46, 40), "%s  %s  %0.1fs" % [TELL_LABEL.get(sub, sub), who, float(crest) / 20.0], cc, Color(0.04, 0.03, 0.08, 0.9), 15)
-	for trap in snap.traps:
-		var c3 := _milli_screen(trap.pos)
-		var kind := str(trap.subtype)
-		var tc: Color = TELL_COLOR.get(kind, Color(0.9, 0.8, 0.4))
-		if not bool(trap.armed):
-			tc.a = 0.55
-		_draw_trap_glyph(c3, kind, tc)
-		if bool(trap.get("echo", false)) and not bool(trap.armed):
-			var arm_at := int(trap.get("arm_at", 0))
-			var remain_a := maxi(0, arm_at - int(snap.tick))
-			var frac_a := 1.0 - float(remain_a) / float(maxi(Balance.BOSS_TELL, 1))
-			draw_arc(c3, 22.0, -PI * 0.5, -PI * 0.5 + TAU * frac_a, 24, TELL_COLOR.echo, 4.0)
-			if font:
-				_plaque(font, c3 + Vector2(-36, -22), "ECHO  %0.1fs" % (float(remain_a) / 20.0), TELL_COLOR.echo, Color(0.08, 0.04, 0.02, 0.9), 14)
-		elif font:
-			_plaque(font, c3 + Vector2(-28, 26), str(TELL_LABEL.get(kind, kind)), tc, Color(0.05, 0.04, 0.03, 0.88), 13)
 	_draw_kits(font)
 	_draw_transform(font)
 	_draw_telegraphs(font)
-	for foe in snap.foes:
-		_draw_unit(foe, _foe_color(str(foe.subtype)), font, true)
-		var blink = foe.get("blink", {})
-		if blink is Dictionary and not blink.is_empty():
-			draw_line(_milli_screen(foe.pos), _milli_screen(blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
-			draw_circle(_milli_screen(blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
-	for angel in snap.angels:
-		if not bool(angel.alive):
-			var fallen := Color(0.25, 0.25, 0.28)
-			_draw_unit(angel, fallen, font, false)
-			if bool(angel.get("downed", false)):
-				var p_down := _milli_screen(angel.pos)
-				var left := int(angel.get("downed_left", 0))
-				var frac := float(left) / float(maxi(int(snap.get("downed_ticks", 60)), 1))
-				draw_arc(p_down, 18.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 24, Color(1.0, 0.45, 0.18), 3.0)
-				if font:
-					draw_string(font, p_down + Vector2(-12, 28), "%0.1f" % (float(left) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.62, 0.3))
-			continue
-		var col: Color = HERO_COLOR.get(str(angel.subtype), Color.WHITE)
-		if int(angel.id) == int(snap.focus_id):
-			draw_circle(_milli_screen(angel.pos), 22, Color(1, 1, 1, 0.15))
-		_draw_unit(angel, col, font, false)
-	for ex in snap.exits:
-		var tile: Vector2i = ex.tile
-		var sp := _tile_screen(tile.x, tile.y)
-		var hint := str(ex.hint)
-		var hc: Color = HINT_COLOR.get(hint, Color(1.0, 0.92, 0.7))
-		draw_rect(Rect2(sp, Vector2(TILE - 1, TILE - 1)), Color(hc.r, hc.g, hc.b, 0.34))
-		draw_rect(Rect2(sp, Vector2(TILE - 1, 5)), hc)
+	_draw_actors(font)
+	for ex2 in snap.exits:
+		var door2: Vector2i = ex2.tile
+		var sp := _tile_center_screen(door2.x, door2.y)
+		var hint := str(ex2.hint)
+		var hc2: Color = HINT_COLOR.get(hint, Color(1.0, 0.92, 0.7))
 		if font:
 			if hint != "":
-				_plaque(font, sp + Vector2(2, -8), hint, Color(0.08, 0.06, 0.04), hc, 15)
-			draw_string(font, sp + Vector2(4, 28), str(ex.label), HORIZONTAL_ALIGNMENT_LEFT, 140, 12, Color(1, 0.97, 0.88))
+				_plaque(font, sp + Vector2(-34, -28), hint, Color(0.08, 0.06, 0.04), hc2, 15)
+			draw_string(font, sp + Vector2(-40, 18), str(ex2.label), HORIZONTAL_ALIGNMENT_LEFT, 120, 12, Color(1, 0.97, 0.88))
 	for pop in snap.popups:
 		if font:
 			var age := int(snap.tick) - int(pop.tick)
 			var colp := Color(1, 0.45, 0.4) if str(pop.kind) == "bad" else Color(0.6, 1, 0.65)
 			draw_string(font, _milli_screen(pop.pos) + Vector2(-8, -18 - age), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, colp)
+	_draw_guide()
 	if str(snap.banner) != "" and font:
 		var bp := view_pos + Vector2(12, 36)
 		_plaque(font, bp, str(snap.banner), Color(1, 0.86, 0.45), Color(0.08, 0.05, 0.03, 0.9), 22)
@@ -351,8 +337,7 @@ func _draw_telegraphs(font) -> void:
 		var marked := 0
 		for mark in snap.hell_rain:
 			var mp := _milli_screen(mark.pos)
-			draw_circle(mp, Balance.HELL_RAIN_RADIUS / 1000.0 * TILE, Color(tell.r, tell.g, tell.b, 0.32))
-			draw_arc(mp, Balance.HELL_RAIN_RADIUS / 1000.0 * TILE, 0, TAU, 24, tell, 2.0)
+			_draw_world_disk(mark.pos, float(Balance.HELL_RAIN_RADIUS), Color(tell.r, tell.g, tell.b, 0.32), tell, 2.0)
 			if font and marked == 0:
 				_plaque(font, mp + Vector2(-22, -16), "MOVE", Color(0.15, 0.02, 0.02), tell, 14)
 			marked += 1
@@ -385,7 +370,7 @@ func _draw_telegraphs(font) -> void:
 				_plaque(font, _milli_screen(boss) + Vector2(-36, -88), "PHALANX", Color(0.12, 0.02, 0.06), tell, 14)
 	if font:
 		var remain := maxi(0, int(tg.get("until", 0)) - int(snap.tick))
-		_plaque(font, Vector2(INSET_L + 8, INSET_T + 28), "%s  %0.1fs" % [str(TELL_LABEL.get(name, name)), float(remain) / 20.0], tell, Color(0.06, 0.04, 0.05, 0.92), 20)
+		_plaque(font, _view_origin() + Vector2(8, 28), "%s  %0.1fs" % [str(TELL_LABEL.get(name, name)), float(remain) / 20.0], tell, Color(0.06, 0.04, 0.05, 0.92), 20)
 
 
 func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
@@ -398,7 +383,14 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 		draw_arc(p, radius + 10, 0, TAU, 18, TELL_COLOR.echo, 3.0)
 	if foe and int(u.id) == int(snap.focus_id):
 		draw_arc(p, radius + 8, 0, TAU, 18, Color(1, 1, 1, 0.9), 2.0)
-	draw_circle(p, radius, col)
+	var foot := PackedVector2Array([
+		p + Vector2(0, -radius * 0.55),
+		p + Vector2(radius * 1.15, 0),
+		p + Vector2(0, radius * 0.55),
+		p + Vector2(-radius * 1.15, 0),
+	])
+	draw_colored_polygon(foot, Color(col.r * 0.28, col.g * 0.28, col.b * 0.28, 0.85))
+	draw_circle(p, radius * 0.82, col)
 	if bool(u.get("mark", false)):
 		draw_arc(p, radius + 5, 0, TAU, 16, Color(1, 0.2, 0.25), 2.0)
 	if bool(u.get("silence", false)):
@@ -472,33 +464,293 @@ func _foe_color(subtype: String) -> Color:
 			return Color(0.8, 0.2, 0.2)
 
 
+func _view_origin() -> Vector2:
+	return Vector2(INSET_L, INSET_T)
+
+
+func _inset_b() -> float:
+	if size.x < NARROW_W and size.x >= 400.0:
+		return NARROW_INSET_B
+	return INSET_B
+
+
 func _view_size() -> Vector2:
-	return Vector2(maxi(size.x - INSET_L - 8, 100), maxi(size.y - INSET_T - INSET_B, 100))
+	return Vector2(maxi(size.x - INSET_L - INSET_R, 100), maxi(size.y - INSET_T - _inset_b(), 100))
 
 
-func _screen_to_world(screen: Vector2) -> Vector2:
-	return screen
+func playfield_rect() -> Rect2:
+	return Rect2(_view_origin(), _view_size())
 
 
-func _world_to_milli(screen: Vector2) -> Vector2i:
-	var local := screen - Vector2(INSET_L, INSET_T) + cam
-	return Vector2i(int(local.x / TILE * 1000.0), int(local.y / TILE * 1000.0))
+## Tile corner (col, row) in unzoomed iso pixels. Width:height of each step is 2:1.
+static func iso_of_tile(col: float, row: float) -> Vector2:
+	return Vector2((col - row) * (TILE_W * 0.5), (col + row) * (TILE_H * 0.5))
 
 
-func _milli_to_local_unoffset(m: Vector2i) -> Vector2:
-	return Vector2(float(m.x) / 1000.0 * TILE, float(m.y) / 1000.0 * TILE)
+## Inverse of iso_of_tile. (a + b) / 2, (b - a) / 2 with a = x/(w/2), b = y/(h/2).
+static func tile_of_iso(p: Vector2) -> Vector2:
+	var a := p.x / (TILE_W * 0.5)
+	var b := p.y / (TILE_H * 0.5)
+	return Vector2((a + b) * 0.5, (b - a) * 0.5)
 
 
-func _milli_to_world(m: Vector2i) -> Vector2:
-	return _milli_to_local_unoffset(m)
+## Painter depth. Larger values are closer to the camera (lower on screen) and draw later.
+static func iso_depth(col: float, row: float) -> float:
+	return col + row
+
+
+func _iso_milli(m: Vector2i) -> Vector2:
+	return iso_of_tile(float(m.x) / 1000.0, float(m.y) / 1000.0)
 
 
 func _milli_screen(m: Vector2i) -> Vector2:
-	return Vector2(INSET_L, INSET_T) + _milli_to_local_unoffset(m) - cam
+	return _view_origin() + (_iso_milli(m) - cam) * zoom
 
 
-func _tile_screen(tx: int, ty: int) -> Vector2:
-	return Vector2(INSET_L, INSET_T) + Vector2(tx * TILE, ty * TILE) - cam
+func _screen_to_milli(screen: Vector2) -> Vector2i:
+	var iso: Vector2 = (screen - _view_origin()) / zoom + cam
+	var t := tile_of_iso(iso)
+	return Vector2i(roundi(t.x * 1000.0), roundi(t.y * 1000.0))
+
+
+func _tile_center_screen(tx: int, ty: int) -> Vector2:
+	return _milli_screen(Fixed.tile_center(Vector2i(tx, ty)))
+
+
+func _iso_screen_delta(a: Vector2i, b: Vector2i) -> Vector2:
+	return _milli_screen(b) - _milli_screen(a)
+
+
+func _iso_bounds(rect: Rect2i) -> Rect2:
+	var x0 := float(rect.position.x)
+	var y0 := float(rect.position.y)
+	var x1 := x0 + float(rect.size.x)
+	var y1 := y0 + float(rect.size.y)
+	var pts: Array[Vector2] = [
+		iso_of_tile(x0, y0),
+		iso_of_tile(x1, y0),
+		iso_of_tile(x0, y1),
+		iso_of_tile(x1, y1),
+	]
+	var lo := pts[0]
+	var hi := pts[0]
+	for p in pts:
+		lo.x = minf(lo.x, p.x)
+		lo.y = minf(lo.y, p.y)
+		hi.x = maxf(hi.x, p.x)
+		hi.y = maxf(hi.y, p.y)
+	return Rect2(lo, hi - lo)
+
+
+func _focus_rect() -> Rect2i:
+	var map = game.sim.map
+	var room = map.by_id.get(str(snap.party_room), {})
+	if room.is_empty():
+		var t := Fixed.tile_of(snap.anchor)
+		return Rect2i(t.x - 7, t.y - 7, 14, 14)
+	if bool(room.corridor):
+		var t2 := Fixed.tile_of(snap.anchor)
+		return Rect2i(t2.x - 8, t2.y - 5, 17, 11)
+	var rect: Rect2i = room.rect
+	return rect.grow(1)
+
+
+func _clamp_cam(desired: float, lo: float, hi: float, span: float) -> float:
+	if hi - lo >= span:
+		return desired
+	return clampf(desired, hi - span, lo)
+
+
+func _cull_rect() -> Rect2i:
+	var span := _view_size() / zoom
+	var min_c := 1000000.0
+	var min_r := 1000000.0
+	var max_c := -1000000.0
+	var max_r := -1000000.0
+	var corners: Array[Vector2] = [cam, cam + Vector2(span.x, 0.0), cam + Vector2(0.0, span.y), cam + span]
+	for corner in corners:
+		var t := tile_of_iso(corner)
+		min_c = minf(min_c, t.x)
+		min_r = minf(min_r, t.y)
+		max_c = maxf(max_c, t.x)
+		max_r = maxf(max_r, t.y)
+	var x0 := int(floor(min_c)) - 2
+	var y0 := int(floor(min_r)) - 2
+	var x1 := int(ceil(max_c)) + 3
+	var y1 := int(ceil(max_r)) + 3
+	return Rect2i(x0, y0, maxi(x1 - x0, 1), maxi(y1 - y0, 1))
+
+
+## Diamond under the finger if it is walkable, otherwise the nearest walkable tile within 16.
+func _nearest_walkable(milli: Vector2i) -> Vector2i:
+	var origin := Fixed.tile_of(milli)
+	if game.sim.map.at(origin) >= 0:
+		return origin
+	var best := Vector2i(-1, -1)
+	var best_d := 16001
+	for dy in range(-16, 17):
+		for dx in range(-16, 17):
+			var t := origin + Vector2i(dx, dy)
+			if game.sim.map.at(t) < 0:
+				continue
+			var d := Fixed.dist(milli, Fixed.tile_center(t))
+			if d < best_d:
+				best_d = d
+				best = t
+	if best_d > 16000:
+		return Vector2i(-1, -1)
+	return best
+
+
+func _draw_tile_diamond(center: Vector2, col: Color, inset: float = 0.96) -> void:
+	var hw := TILE_W * 0.5 * zoom * inset
+	var hh := TILE_H * 0.5 * zoom * inset
+	var pts := PackedVector2Array([
+		center + Vector2(0, -hh),
+		center + Vector2(hw, 0),
+		center + Vector2(0, hh),
+		center + Vector2(-hw, 0),
+	])
+	draw_colored_polygon(pts, col)
+	var hi := col.lightened(0.28)
+	var lo := col.darkened(0.35)
+	var edge := maxf(1.25, 1.6 * zoom)
+	draw_line(pts[0], pts[1], hi, edge)
+	draw_line(pts[0], pts[3], hi, edge)
+	draw_line(pts[1], pts[2], lo, edge)
+	draw_line(pts[3], pts[2], lo, edge)
+
+
+func _world_radii(radius_milli: float) -> Vector2:
+	var r := radius_milli / 1000.0 * sqrt(2.0) * zoom
+	return Vector2(r * TILE_W * 0.5, r * TILE_H * 0.5)
+
+
+func _draw_world_disk(center_milli: Vector2i, radius_milli: float, fill: Color, ring: Color = Color(0, 0, 0, 0), width: float = 2.0) -> void:
+	if radius_milli <= 0.0:
+		return
+	var center := _milli_screen(center_milli)
+	var radii := _world_radii(radius_milli)
+	var n := 28
+	var pts := PackedVector2Array()
+	pts.resize(n)
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		pts[i] = center + Vector2(cos(a) * radii.x, sin(a) * radii.y)
+	if fill.a > 0.0:
+		draw_colored_polygon(pts, fill)
+	if ring.a > 0.0:
+		var closed := pts.duplicate()
+		closed.append(pts[0])
+		draw_polyline(closed, ring, width)
+
+
+func _draw_actors(font) -> void:
+	var actors: Array = []
+	for trap in snap.traps:
+		actors.append({"depth": int(trap.pos.x) + int(trap.pos.y), "kind": "trap", "u": trap})
+	for foe in snap.foes:
+		actors.append({"depth": int(foe.pos.x) + int(foe.pos.y), "kind": "foe", "u": foe})
+	for angel in snap.angels:
+		actors.append({"depth": int(angel.pos.x) + int(angel.pos.y), "kind": "angel", "u": angel})
+	actors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.depth) < int(b.depth)
+	)
+	for actor in actors:
+		var u: Dictionary = actor.u
+		if str(actor.kind) == "trap":
+			_draw_trap_actor(u, font)
+		elif str(actor.kind) == "foe":
+			_draw_unit(u, _foe_color(str(u.subtype)), font, true)
+			var blink = u.get("blink", {})
+			if blink is Dictionary and not blink.is_empty():
+				draw_line(_milli_screen(u.pos), _milli_screen(blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
+				draw_circle(_milli_screen(blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
+		elif not bool(u.alive):
+			_draw_unit(u, Color(0.25, 0.25, 0.28), font, false)
+			if bool(u.get("downed", false)):
+				var p_down := _milli_screen(u.pos)
+				var left := int(u.get("downed_left", 0))
+				var frac := float(left) / float(maxi(int(snap.get("downed_ticks", 60)), 1))
+				draw_arc(p_down, 18.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 24, Color(1.0, 0.45, 0.18), 3.0)
+				if font:
+					draw_string(font, p_down + Vector2(-12, 28), "%0.1f" % (float(left) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.62, 0.3))
+		else:
+			var col: Color = HERO_COLOR.get(str(u.subtype), Color.WHITE)
+			if int(u.id) == int(snap.focus_id):
+				draw_circle(_milli_screen(u.pos), 22, Color(1, 1, 1, 0.15))
+			_draw_unit(u, col, font, false)
+
+
+func _draw_trap_actor(trap: Dictionary, font) -> void:
+	var c3 := _milli_screen(trap.pos)
+	var kind := str(trap.subtype)
+	var tc: Color = TELL_COLOR.get(kind, Color(0.9, 0.8, 0.4))
+	if not bool(trap.armed):
+		tc.a = 0.55
+	_draw_trap_glyph(c3, kind, tc)
+	if bool(trap.get("echo", false)) and not bool(trap.armed):
+		var arm_at := int(trap.get("arm_at", 0))
+		var remain_a := maxi(0, arm_at - int(snap.tick))
+		var frac_a := 1.0 - float(remain_a) / float(maxi(Balance.BOSS_TELL, 1))
+		draw_arc(c3, 22.0, -PI * 0.5, -PI * 0.5 + TAU * frac_a, 24, TELL_COLOR.echo, 4.0)
+		if font:
+			_plaque(font, c3 + Vector2(-36, -22), "ECHO  %0.1fs" % (float(remain_a) / 20.0), TELL_COLOR.echo, Color(0.08, 0.04, 0.02, 0.9), 14)
+	elif font:
+		_plaque(font, c3 + Vector2(-28, 26), str(TELL_LABEL.get(kind, kind)), tc, Color(0.05, 0.04, 0.03, 0.88), 13)
+
+
+func _guide_milli() -> Vector2i:
+	if snap.is_empty() or game == null:
+		return Vector2i.ZERO
+	var stake := str(snap.get("stake_id", ""))
+	if stake != "" and not _stake_done(stake) and int(snap.get("boss_hp_max", 0)) <= 0:
+		var node: Vector2i = game.sim.map.node_tile("%s:rear" % stake)
+		if node.x >= 0:
+			return Fixed.tile_center(node)
+	if snap.path is Array and not snap.path.is_empty():
+		var step: Vector2i = snap.path[mini(3, snap.path.size() - 1)]
+		return Fixed.tile_center(step)
+	var best := Vector2i.ZERO
+	var best_d := 1 << 30
+	var anchor: Vector2i = snap.anchor
+	for ex in snap.exits:
+		var c: Vector2i = Fixed.tile_center(ex.tile)
+		var d := Fixed.dist(anchor, c)
+		if d < best_d:
+			best_d = d
+			best = c
+	if best == Vector2i.ZERO or best_d < 400:
+		return Vector2i.ZERO
+	return best
+
+
+func _stake_done(stake: String) -> bool:
+	match stake:
+		"seal":
+			return bool(snap.get("seal_done", false))
+		"font":
+			return bool(snap.get("font_done", false))
+		"altar":
+			return bool(snap.get("altar_done", false))
+		_:
+			return false
+
+
+func _draw_guide() -> void:
+	var target := _guide_milli()
+	if target == Vector2i.ZERO:
+		return
+	var dir := _iso_screen_delta(snap.anchor, target)
+	if dir.length() < 18.0:
+		return
+	dir = dir.normalized()
+	var from := _milli_screen(snap.anchor)
+	var base := from + dir * 30.0
+	var tip := from + dir * 76.0
+	var side := Vector2(-dir.y, dir.x)
+	draw_line(from + dir * 16.0, base, Color(0.98, 0.82, 0.22, 0.85), 3.0)
+	draw_colored_polygon(PackedVector2Array([tip, base + side * 11.0, base - side * 11.0]), Color(0.98, 0.84, 0.28, 0.96))
 
 
 func _boss_pos() -> Vector2i:
@@ -547,9 +799,18 @@ func _draw_trap_glyph(c: Vector2, kind: String, col: Color) -> void:
 			draw_rect(Rect2(c - Vector2(8, 8), Vector2(16, 16)), col)
 
 
-func _draw_fog_edge(tx: int, ty: int, vis: Dictionary, map, p: Vector2) -> void:
-	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	for d in dirs:
+func _draw_fog_edge(tx: int, ty: int, vis: Dictionary, map, center: Vector2) -> void:
+	var hw := TILE_W * 0.5 * zoom
+	var hh := TILE_H * 0.5 * zoom
+	var top := center + Vector2(0, -hh)
+	var right := center + Vector2(hw, 0)
+	var bottom := center + Vector2(0, hh)
+	var left := center + Vector2(-hw, 0)
+	var dirs: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	var edges: Array = [top, right, bottom, left, top]
+	var ink := Color(0.015, 0.012, 0.02, 0.95)
+	for i in dirs.size():
+		var d: Vector2i = dirs[i]
 		var n := Vector2i(tx, ty) + d
 		var hidden := true
 		if n.x >= 0 and n.y >= 0 and n.x < map.width and n.y < map.height:
@@ -558,15 +819,7 @@ func _draw_fog_edge(tx: int, ty: int, vis: Dictionary, map, p: Vector2) -> void:
 				hidden = false
 		if not hidden:
 			continue
-		var ink := Color(0.015, 0.012, 0.02, 0.92)
-		if d.x > 0:
-			draw_rect(Rect2(p.x + TILE - 6, p.y, 5, TILE - 1), ink)
-		elif d.x < 0:
-			draw_rect(Rect2(p.x, p.y, 5, TILE - 1), ink)
-		elif d.y > 0:
-			draw_rect(Rect2(p.x, p.y + TILE - 6, TILE - 1, 5), ink)
-		else:
-			draw_rect(Rect2(p.x, p.y, TILE - 1, 5), ink)
+		draw_line(edges[i], edges[i + 1], ink, maxf(3.0, 4.0 * zoom))
 
 
 func _plaque(font, at: Vector2, text: String, fg: Color, bg: Color, sz: int) -> void:

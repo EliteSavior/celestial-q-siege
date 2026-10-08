@@ -12,19 +12,20 @@ config_version=5
 
 config/name="Celestial Q Siege"
 config/description="Touch-friendly 1v1 asymmetric angels-vs-demons strategy RPG for Android."
-config/version="1.0.0"
+config/version="1.0.2"
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
 
 [display]
 
-; Landscape orientation (sensor landscape on Android so it flips with the device).
+; Base layout is 1280x720 and expands. Phones open in portrait; a 1080x2400
+; window becomes a tall canvas so the iso room stays fully on screen.
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/handheld/orientation=4
+window/handheld/orientation=5
 
 [input_devices]
 

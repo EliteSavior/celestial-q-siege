@@ -367,34 +367,14 @@ func _layout_bottom() -> void:
 		h = 720.0
 	if w < 400.0:
 		w = 1280.0
-	var cmd_y := h - 100.0
-	var stance_y := h - 80.0
-	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
-	for i in cmds.size():
-		if not _bar.has(cmds[i]):
-			continue
-		var btn: Button = _bar[cmds[i]]
-		btn.position = Vector2(748 + i * 104, cmd_y)
-	for i in _stances.keys():
-		var stance: Button = _stances[i]
-		stance.position = Vector2(210 + int(i) * 98, stance_y)
-	if _scatter:
-		_scatter.position = Vector2(520, stance_y)
-	if _phalanx:
-		_phalanx.position = Vector2(628, stance_y)
-	if _feed:
-		_feed.position = Vector2(210, h - 176.0)
-	if _passive:
-		_passive.position = Vector2(210, h - 252.0)
-	if _coach_bg:
-		_coach_bg.position = Vector2(210, h - 224.0)
-		_coach_bg.size = Vector2(1040, 40)
-	if _coach:
-		_coach.position = Vector2(218, h - 218.0)
-		_coach.size = Vector2(860, 32)
-	if _hide:
-		_hide.position = Vector2(1090, h - 222.0)
-		_hide.size = Vector2(150, 36)
+	if _pause:
+		_pause.position = Vector2(w - 192.0, 8)
+	if _speed:
+		_speed.position = Vector2(w - 92.0, 8)
+	if w < 1200.0:
+		_layout_narrow(w, h)
+	else:
+		_layout_wide(w, h)
 	if _begin:
 		_begin.position = Vector2((w - 320.0) * 0.5, h - 108.0)
 		_begin.size = Vector2(320, 72)
@@ -410,6 +390,129 @@ func _layout_bottom() -> void:
 		_defeat_mark.position = Vector2((w - 720.0) * 0.5, h * 0.16)
 	if _end_label:
 		_end_label.position = Vector2((w - 760.0) * 0.5, h * 0.32)
+
+
+func _layout_wide(w: float, h: float) -> void:
+	if _golden:
+		_golden.position = Vector2(210, 8)
+		_golden.size = Vector2(300, 26)
+	if _dark:
+		_dark.position = Vector2(560, 8)
+		_dark.size = Vector2(300, 26)
+	if _golden_l:
+		_golden_l.position = Vector2(210, 36)
+	if _dark_l:
+		_dark_l.position = Vector2(560, 36)
+	if _clock:
+		_clock.position = Vector2(980, 12)
+		_clock.size = Vector2(460, 28)
+	if _room:
+		_room.position = Vector2(210, 56)
+		_room.size = Vector2(760, 24)
+	var cmd_y := h - 100.0
+	var stance_y := h - 80.0
+	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
+	for i in cmds.size():
+		if not _bar.has(cmds[i]):
+			continue
+		var btn: Button = _bar[cmds[i]]
+		btn.position = Vector2(748 + i * 104, cmd_y)
+		btn.size = Vector2(100, 88)
+	for i in _stances.keys():
+		var stance: Button = _stances[i]
+		stance.position = Vector2(210 + int(i) * 98, stance_y)
+		stance.size = Vector2(90, 48)
+	if _scatter:
+		_scatter.position = Vector2(520, stance_y)
+		_scatter.size = Vector2(100, 48)
+	if _phalanx:
+		_phalanx.position = Vector2(628, stance_y)
+		_phalanx.size = Vector2(100, 48)
+	if _feed:
+		_feed.position = Vector2(210, h - 176.0)
+		_feed.size = Vector2(760, 56)
+	if _passive:
+		_passive.position = Vector2(210, h - 252.0)
+		_passive.size = Vector2(760, 22)
+	if _coach_bg:
+		_coach_bg.position = Vector2(210, h - 224.0)
+		_coach_bg.size = Vector2(1040, 40)
+	if _coach:
+		_coach.position = Vector2(218, h - 218.0)
+		_coach.size = Vector2(860, 32)
+	if _hide:
+		_hide.position = Vector2(1090, h - 222.0)
+		_hide.size = Vector2(150, 36)
+
+
+func _layout_narrow(w: float, h: float) -> void:
+	var bar_w := maxf(140.0, (w - 420.0) * 0.5 - 8.0)
+	if _golden:
+		_golden.position = Vector2(210, 8)
+		_golden.size = Vector2(bar_w, 26)
+	if _dark:
+		_dark.position = Vector2(226.0 + bar_w, 8)
+		_dark.size = Vector2(bar_w, 26)
+	if _golden_l:
+		_golden_l.position = Vector2(210, 36)
+	if _dark_l:
+		_dark_l.position = Vector2(226.0 + bar_w, 36)
+	if _clock:
+		_clock.position = Vector2(w - 150.0, 54)
+		_clock.size = Vector2(140, 28)
+	if _room:
+		_room.position = Vector2(210, 56)
+		_room.size = Vector2(maxi(w - 420.0, 200.0), 24)
+	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
+	var cmd_y := h - 116.0
+	var cmd_w := 100.0
+	var gap := 8.0
+	var cmd_total := cmds.size() * cmd_w + (cmds.size() - 1) * gap
+	if cmd_total > w - 16.0:
+		cmd_w = floor((w - 16.0 - (cmds.size() - 1) * gap) / float(cmds.size()))
+		cmd_total = cmds.size() * cmd_w + (cmds.size() - 1) * gap
+	var x := (w - cmd_total) * 0.5
+	for i in cmds.size():
+		if not _bar.has(cmds[i]):
+			continue
+		var btn: Button = _bar[cmds[i]]
+		btn.position = Vector2(x, cmd_y)
+		btn.size = Vector2(cmd_w, 88)
+		x += cmd_w + gap
+	var stance_y := h - 176.0
+	var row: Array = []
+	for i in [0, 1, 2]:
+		if _stances.has(i):
+			row.append(_stances[i])
+	if _scatter:
+		row.append(_scatter)
+	if _phalanx:
+		row.append(_phalanx)
+	var row_w := 0.0
+	for b in row:
+		row_w += b.size.x
+	if row.size() > 1:
+		row_w += gap * float(row.size() - 1)
+	var sx := (w - row_w) * 0.5
+	for b2 in row:
+		var stance: Button = b2
+		stance.position = Vector2(sx, stance_y)
+		sx += stance.size.x + gap
+	if _feed:
+		_feed.position = Vector2(16, h - 300.0)
+		_feed.size = Vector2(w - 32.0, 40)
+	if _passive:
+		_passive.position = Vector2(16, h - 252.0)
+		_passive.size = Vector2(w - 32.0, 22)
+	if _coach_bg:
+		_coach_bg.position = Vector2(16, h - 222.0)
+		_coach_bg.size = Vector2(w - 180.0, 40)
+	if _coach:
+		_coach.position = Vector2(24, h - 216.0)
+		_coach.size = Vector2(maxi(w - 210.0, 80.0), 32)
+	if _hide:
+		_hide.position = Vector2(w - 156.0, h - 220.0)
+		_hide.size = Vector2(140, 36)
 
 
 func _build_portraits() -> void:

@@ -59,6 +59,7 @@ func run_all() -> int:
 		"test_command_bar_routes_every_button",
 		"test_elixir_spend_cap_and_interaction_income",
 		"test_scene_touch_playable",
+		"test_iso_screen_tile_roundtrip",
 		"test_threat_tells_are_distinct",
 		"test_win_lose_restart_loop",
 		"test_coach_hints_name_the_loop",
@@ -2719,6 +2720,169 @@ func test_walking_past_the_kit_loses() -> void:
 		return
 	if sim.altar_done:
 		fail("passive run banked the altar")
+
+
+func test_iso_screen_tile_roundtrip() -> void:
+	# 2:1 dimetric: tile (col, row) -> ((col - row) * w/2, (col + row) * h/2), w = 2h.
+	var east: Vector2 = BoardView.iso_of_tile(1.0, 0.0) - BoardView.iso_of_tile(0.0, 0.0)
+	var south: Vector2 = BoardView.iso_of_tile(0.0, 1.0) - BoardView.iso_of_tile(0.0, 0.0)
+	if absf(BoardView.TILE_W - BoardView.TILE_H * 2.0) > 0.001:
+		fail("tile ratio %s:%s is not 2:1" % [BoardView.TILE_W, BoardView.TILE_H])
+		return
+	if absf(absf(east.x) - 2.0 * absf(east.y)) > 0.001 or east.x <= 0.0 or east.y <= 0.0:
+		fail("east step is not down-right 2:1 %s" % east)
+		return
+	if absf(absf(south.x) - 2.0 * absf(south.y)) > 0.001 or south.x >= 0.0 or south.y <= 0.0:
+		fail("south step is not down-left 2:1 %s" % south)
+		return
+	if absf(BoardView.iso_of_tile(1.0, 1.0).x - BoardView.iso_of_tile(0.0, 0.0).x) > 0.001:
+		fail("a diagonal step should stay on a vertical screen column")
+		return
+	if BoardView.iso_depth(1.0, 0.0) >= BoardView.iso_depth(2.0, 2.0):
+		fail("nearer tiles must sort after farther ones")
+		return
+	var sample := Vector2(40.5, 12.25)
+	var back: Vector2 = BoardView.tile_of_iso(BoardView.iso_of_tile(sample.x, sample.y))
+	if absf(back.x - sample.x) > 0.0001 or absf(back.y - sample.y) > 0.0001:
+		fail("iso inverse drifted to %s" % back)
+		return
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game._process(0.0)
+	game.board._process(0.0)
+	var tile := Vector2i(8, 46)
+	var milli := Fixed.tile_center(tile)
+	var screen: Vector2 = game.board._milli_screen(milli)
+	if not game.board.playfield_rect().has_point(screen):
+		fail("projected tile %s fell outside the playfield at %s" % [tile, screen])
+		game.queue_free()
+		return
+	var back_m: Vector2i = game.board._screen_to_milli(screen)
+	if Fixed.tile_of(back_m) != tile:
+		fail("screen %s of %s came back as %s (%s)" % [screen, tile, Fixed.tile_of(back_m), back_m])
+		game.queue_free()
+		return
+	var far: Vector2 = game.board._tile_center_screen(10, 40)
+	var near: Vector2 = game.board._tile_center_screen(10, 50)
+	if near.y <= far.y:
+		fail("southern tile should sit lower on screen (%s vs %s)" % [near, far])
+		game.queue_free()
+		return
+	game._tap_frame = -1
+	var touch := InputEventScreenTouch.new()
+	touch.pressed = true
+	touch.index = 0
+	touch.position = screen
+	var queued := game.sim.queue.size()
+	game._unhandled_input(touch)
+	if game.sim.queue.size() <= queued:
+		fail("iso tap at %s did not submit" % screen)
+		game.queue_free()
+		return
+	var cmd: Dictionary = game.sim.queue.back()
+	if str(cmd.type) != "move_tile" or cmd.args.tile != tile:
+		fail("iso tap submitted %s" % cmd)
+		game.queue_free()
+		return
+	# A known screen point (the playfield center) with the camera parked on a tile center.
+	var forced := Vector2i(10, 44)
+	var forced_milli := Fixed.tile_center(forced)
+	var iso: Vector2 = BoardView.iso_of_tile(float(forced_milli.x) / 1000.0, float(forced_milli.y) / 1000.0)
+	var view: Vector2 = game.board._view_size()
+	game.board.zoom = 1.0
+	game.board.cam = iso - view * 0.5
+	var known: Vector2 = game.board._view_origin() + view * 0.5
+	var got: Vector2i = game.board._screen_to_milli(known)
+	if Fixed.tile_of(got) != forced:
+		fail("playfield center mapped to %s (%s), want %s" % [Fixed.tile_of(got), got, forced])
+		game.queue_free()
+		return
+	var again: Vector2 = game.board._milli_screen(forced_milli)
+	if again.distance_to(known) > 0.75:
+		fail("round trip screen %s vs %s" % [again, known])
+		game.queue_free()
+		return
+	# Just outside the antechamber, still within 16 tiles, snaps onto a walkable tile.
+	var outside := Vector2i(0, 46)
+	var out_milli := Fixed.tile_center(outside)
+	var out_iso: Vector2 = BoardView.iso_of_tile(float(out_milli.x) / 1000.0, float(out_milli.y) / 1000.0)
+	game.board.zoom = 1.0
+	game.board.cam = out_iso - view * 0.5
+	game._tap_frame = -1
+	var miss := InputEventScreenTouch.new()
+	miss.pressed = true
+	miss.index = 1
+	miss.position = game.board._milli_screen(out_milli)
+	queued = game.sim.queue.size()
+	game._unhandled_input(miss)
+	if game.sim.queue.size() <= queued:
+		fail("void tap within 16 tiles did not snap")
+		game.queue_free()
+		return
+	var snapped: Dictionary = game.sim.queue.back()
+	if str(snapped.type) != "move_tile":
+		fail("void tap submitted %s" % snapped.type)
+		game.queue_free()
+		return
+	var dest: Vector2i = snapped.args.tile
+	if game.sim.map.at(dest) < 0 or Fixed.dist(out_milli, Fixed.tile_center(dest)) > 16000:
+		fail("snap %s is not a walkable tile within 16" % dest)
+		game.queue_free()
+		return
+	var dir_east: Vector2 = game.board._iso_screen_delta(forced_milli, Fixed.tile_center(forced + Vector2i(4, 0)))
+	var dir_south: Vector2 = game.board._iso_screen_delta(forced_milli, Fixed.tile_center(forced + Vector2i(0, 4)))
+	if dir_east.x <= 0.0 or dir_east.y <= 0.0:
+		fail("gold-arrow east is not down-right in iso %s" % dir_east)
+		game.queue_free()
+		return
+	if dir_south.x >= 0.0 or dir_south.y <= 0.0:
+		fail("gold-arrow south is not down-left in iso %s" % dir_south)
+		game.queue_free()
+		return
+	game.hud.size = Vector2(1080, 2400)
+	game.board.size = Vector2(1080, 2400)
+	game.hud._layout_bottom()
+	var play: Rect2 = game.board.playfield_rect()
+	for cmd_name in ["shield", "heal", "cleanse", "detect", "burst"]:
+		var r: Rect2 = game.hud._bar[cmd_name].get_rect()
+		if r.position.x < 0.0 or r.position.y < 0.0 or r.end.x > 1080.0 or r.end.y > 2400.0:
+			fail("portrait %s outside the phone %s" % [cmd_name, r])
+			game.queue_free()
+			return
+		if r.intersects(play):
+			fail("portrait %s overlaps the playfield %s vs %s" % [cmd_name, r, play])
+			game.queue_free()
+			return
+	var pause_r: Rect2 = game.hud._pause.get_rect()
+	if pause_r.end.x > 1080.0 or pause_r.position.x < 860.0 or pause_r.position.y > 40.0:
+		fail("pause/menu is not top-right on a portrait phone %s" % pause_r)
+		game.queue_free()
+		return
+	if pause_r.intersects(play):
+		fail("pause/menu overlaps the playfield %s vs %s" % [pause_r, play])
+		game.queue_free()
+		return
+	var coach_r: Rect2 = game.hud._coach_bg.get_rect()
+	var shield_r: Rect2 = game.hud._bar.shield.get_rect()
+	if coach_r.intersects(play) or coach_r.end.y > shield_r.position.y:
+		fail("coach overlaps playfield or the command bar %s shield %s play %s" % [coach_r, shield_r, play])
+		game.queue_free()
+		return
+	game.queue_free()
 
 
 func _drive(policy, limit: int) -> Dictionary:
