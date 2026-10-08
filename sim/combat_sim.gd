@@ -15,8 +15,8 @@ const _STANCE_NAME := ["Tight", "Spread", "Column"]
 const _KIT := {
 	"michael": ["taunt", "shield_wall", "body_block"],
 	"raphael": ["single_heal", "party_heal", "slow_revive"],
-	"azrael": ["burst", "disarm", "escape_dash"],
-	"uriel": ["beam", "aoe_zone", "disengage"],
+	"azrael": ["strike", "burst", "disarm", "escape_dash"],
+	"uriel": ["sunstrike", "beam", "aoe_zone", "disengage"],
 	"gabriel": ["cleanse", "self_shield", "emergency_res"],
 }
 
@@ -65,6 +65,8 @@ var route_lock_until := 0
 
 var focus_id := 0
 var focus_until := 0
+# Living hero chosen by a tap. Single heal spends on this angel when set.
+var ally_target := ""
 var phase := "dungeon"
 var outcome := ""
 var max_depth := 0
@@ -165,6 +167,7 @@ func reset() -> void:
 	route_lock_until = 0
 	focus_id = 0
 	focus_until = 0
+	ally_target = ""
 	phase = "dungeon"
 	outcome = ""
 	max_depth = 0
@@ -311,6 +314,8 @@ func _exec(c: Dictionary) -> void:
 			_cmd_stance(int(args.get("stance", stance)))
 		"focus":
 			_cmd_focus(int(args.get("id", 0)))
+		"ally":
+			_cmd_ally(str(args.get("target", "")))
 		"shield", "heal", "cleanse", "detect", "burst":
 			_cast(_route(type), args)
 		"ability":
@@ -417,6 +422,18 @@ func _cmd_stance(next: int) -> void:
 	_log("Stance: %s." % _STANCE_NAME[stance], "info")
 
 
+func _cmd_ally(name: String) -> void:
+	var hero := _hero(name)
+	if hero.is_empty() or not hero.alive:
+		return
+	if ally_target == name:
+		ally_target = ""
+		_log("Mend target cleared.", "info")
+		return
+	ally_target = name
+	_log("Mend target: %s." % hero.name, "info")
+
+
 func _cmd_focus(id: int) -> void:
 	if id == focus_id:
 		focus_id = 0
@@ -495,6 +512,7 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 				return false
 			taunt_id = int(pulled.id)
 			taunt_until = tick + Balance.TAUNT_TICKS
+			pulled.pulled = true
 			if pulled.get("blink", {}) is Dictionary and not pulled.blink.is_empty():
 				pulled.blink = {}
 				pulled.teleport_at = tick + Balance.BLINK_PERIOD
@@ -510,20 +528,18 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 			_log("Michael will intercept the next strike.", "good")
 			return true
 		"single_heal":
-			var tgt := _named_angel(args, true)
-			if tgt.is_empty():
-				tgt = _lowest_living()
+			var tgt := _heal_target(args)
 			if tgt.is_empty():
 				_fail("No one to heal.")
 				return false
-			_heal(tgt, Balance.HEAL_SINGLE)
+			_heal(tgt, Balance.HEAL_SINGLE, int(owner.id))
 			_log("Raphael heals %s." % tgt.name, "good")
 			return true
 		"party_heal":
 			var healed := 0
 			for a in _angels():
 				if a.alive:
-					_heal(a, Balance.HEAL_PARTY)
+					_heal(a, Balance.HEAL_PARTY, int(owner.id))
 					healed += 1
 			if healed == 0:
 				_fail("No one to heal.")
@@ -551,6 +567,14 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 			_hurt(foe, _out_damage(Balance.BURST_DMG, owner.id), "single", owner.id, false)
 			_log("Azrael bursts %s." % foe.name, "good")
 			return true
+		"strike":
+			var strike_foe := _focus_or_nearest(owner)
+			if strike_foe.is_empty() or Fixed.dist(owner.pos, strike_foe.pos) > int(owner.range) + 150:
+				_fail("Strike has no target in reach.")
+				return false
+			_hurt(strike_foe, _out_damage(Balance.STRIKE_DMG, owner.id), "single", owner.id, false)
+			_log("Azrael strikes %s." % strike_foe.name, "good")
+			return true
 		"disarm":
 			var trap := _disarm_target()
 			if trap.is_empty():
@@ -567,6 +591,22 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 		"detect_pulse":
 			var n := _reveal_radius(owner.pos, Balance.DETECT_PULSE)
 			_log("Detect pulse reveals %d trap%s." % [n, "" if n == 1 else "s"], "info")
+			return true
+		"sunstrike":
+			var nuke := _focus_or_nearest(owner)
+			if nuke.is_empty() or Fixed.dist(owner.pos, nuke.pos) > int(owner.range):
+				_fail("Sunstrike has no target.")
+				return false
+			var nuke_at: Vector2i = nuke.pos
+			var nuke_id := int(nuke.id)
+			_hurt(nuke, _out_damage(Balance.SUNSTRIKE_DMG, owner.id), "single", owner.id, false)
+			for splash in _living_mobs():
+				if int(splash.id) == nuke_id:
+					continue
+				if Fixed.dist(splash.pos, nuke_at) > Balance.SUNSTRIKE_RADIUS:
+					continue
+				_hurt(splash, _out_damage(Balance.SUNSTRIKE_SPLASH, owner.id), "aoe", owner.id, true)
+			_log("Uriel's sunstrike hits %s." % nuke.name, "good")
 			return true
 		"beam":
 			var aim := _vec(args.get("pos", Vector2i.ZERO))
@@ -826,17 +866,17 @@ func _cmd_spawn(args: Dictionary) -> void:
 	if unit == "swarm":
 		for i in 3:
 			var off := Vector2i((i - 1) * 450, (i - 1) * 280)
-			_make_mob("imp", "Imp", pos + off, 34, 6, 18, 1100, 150, [], node, tell)
+			_make_mob("imp", "Imp", pos + off, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], node, tell)
 		_log("Imps claw their way in.", "bad")
 	elif unit == "heavy":
-		_make_mob("heavy", "Heavy Demon", pos, 260, 13, 18, 1200, 85, [], node, tell)
+		_make_mob("heavy", "Heavy Demon", pos, Balance.HEAVY_HP, Balance.HEAVY_ATK, Balance.HEAVY_PERIOD, Balance.HEAVY_RANGE, Balance.HEAVY_SPEED, [], node, tell)
 		_log("A heavy demon rises.", "bad")
 	elif unit == "elite":
 		var affixes: Array = [] if echo else ["teleporter", "molten"]
-		_make_mob("elite", "Elite", pos, 420, 12, 20, 1300, 100, affixes, node, tell)
+		_make_mob("elite", "Elite", pos, Balance.ELITE_HP, Balance.ELITE_ATK, Balance.ELITE_PERIOD, Balance.ELITE_RANGE, Balance.ELITE_SPEED, affixes, node, tell)
 		_log("An elite takes the node — Teleporter, Molten.", "bad")
 	elif unit == "imp":
-		_make_mob("imp", "Imp", pos, 34, 6, 18, 1100, 150, [], node, tell)
+		_make_mob("imp", "Imp", pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], node, tell)
 		_log("An imp crawls out of the echo.", "bad")
 
 
@@ -1490,8 +1530,12 @@ func _mob_ai() -> void:
 			continue
 		if int(m.get("active_at", 0)) > tick:
 			continue
-		if str(m.subtype) == "elite":
+		_update_aggro(m)
+		if str(m.subtype) == "elite" and bool(m.get("pulled", false)):
 			_elite_affixes(m)
+		if not bool(m.get("pulled", false)):
+			_hold_post(m)
+			continue
 		var tgt := _mob_target(m)
 		if tgt.is_empty():
 			continue
@@ -1982,6 +2026,7 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 	var before := int(target.hp)
 	target.hp = before - amount
 	var dealt := before - maxi(int(target.hp), 0)
+	_note_damage_threat(target, source_id, dealt)
 	if str(target.team) == "angel":
 		stats.damage_taken += dealt
 		_dark_from_damage(str(target.get("room", party_room_id)), dealt)
@@ -2024,15 +2069,21 @@ func _die(target: Dictionary) -> void:
 		_erase_later(target)
 
 
-func _heal(target: Dictionary, amount: int) -> void:
+func _heal(target: Dictionary, amount: int, source_id: int = 0) -> void:
 	if not target.alive:
 		return
 	if int(target.rot_until) > tick:
 		amount = amount * 50 / 100
 	if amount < 1:
 		return
+	var before := int(target.hp)
 	target.hp = mini(int(target.hp_max), int(target.hp) + amount)
-	_popup(target.pos, "+%s" % amount, "good")
+	var gained := int(target.hp) - before
+	if gained < 1:
+		return
+	_popup(target.pos, "+%s" % gained, "good")
+	if source_id != 0:
+		_threat_from_heal(source_id, gained)
 
 
 func _revive(target: Dictionary, pct: int) -> bool:
@@ -2284,7 +2335,12 @@ func build_snapshot() -> Dictionary:
 		if kind == "mob" or kind == "boss":
 			var room_now := map.id_at_tile(Fixed.tile_of(e.pos))
 			if bool(e.alive) and (vis.has(room_now) or kind == "boss"):
-				foes.append(_copy_unit(e))
+				var foe_copy := _copy_unit(e)
+				if kind == "mob":
+					var tgt_now := _mob_target(e)
+					foe_copy["pulled"] = bool(e.get("pulled", false))
+					foe_copy["target"] = str(tgt_now.get("subtype", "")) if not tgt_now.is_empty() else ""
+				foes.append(foe_copy)
 		elif kind == "trap":
 			if bool(e.get("revealed", false)) and (vis.has(str(e.room)) or not bool(e.get("armed", false))):
 				traps.append({
@@ -2368,6 +2424,7 @@ func build_snapshot() -> Dictionary:
 		"anchor": anchor,
 		"path": path.duplicate(),
 		"focus_id": focus_id if focus_until > tick else 0,
+		"ally_target": ally_target,
 		"phase": phase,
 		"outcome": outcome,
 		"party_room": party_room_id,
@@ -2441,6 +2498,7 @@ func checksum() -> int:
 	h = Fixed.mix(h, stance)
 	h = Fixed.mix(h, focus_id)
 	h = Fixed.mix(h, taunt_id)
+	h = Fixed.mix(h, _ally_code())
 	h = Fixed.mix(h, anchor.x)
 	h = Fixed.mix(h, anchor.y)
 	h = Fixed.mix(h, 1 if phase == "lucifer" else 0)
@@ -2457,6 +2515,8 @@ func checksum() -> int:
 		h = Fixed.mix(h, 1 if e.alive else 0)
 		h = Fixed.mix(h, 1 if bool(e.get("final_death", false)) else 0)
 		h = Fixed.mix(h, int(e.get("downed_until", 0)))
+		h = Fixed.mix(h, 1 if bool(e.get("pulled", false)) else 0)
+		h = Fixed.mix(h, _threat_sum(e))
 	return h
 
 
@@ -2538,6 +2598,9 @@ func _make_mob(subtype: String, name: String, pos: Vector2i, hp: int, atk: int, 
 		"node": node,
 		"room": room,
 		"home": room,
+		"threat": {},
+		"pulled": false,
+		"spawn_pos": _clamp_pos(pos),
 	}
 	order.append(id)
 	order.sort()
@@ -2847,11 +2910,11 @@ func _nearest_angel(pos: Vector2i) -> Dictionary:
 func _mob_target(m: Dictionary) -> Dictionary:
 	if tick < taunt_until and int(m.id) == taunt_id:
 		var michael := _hero("michael")
-		if michael.alive:
+		if not michael.is_empty() and michael.alive and int(michael.get("untargetable_until", 0)) <= tick:
 			return michael
 	var marked: Dictionary = {}
 	for a in _angels():
-		if a.alive and int(a.mark_until) > tick:
+		if a.alive and int(a.mark_until) > tick and int(a.get("untargetable_until", 0)) <= tick:
 			if marked.is_empty() or int(a.id) < int(marked.id):
 				marked = a
 	if not marked.is_empty():
@@ -2859,9 +2922,186 @@ func _mob_target(m: Dictionary) -> Dictionary:
 	var blink: Dictionary = m.get("blink", {})
 	if not blink.is_empty():
 		var blink_tgt := _ent(int(blink.get("target", 0)))
-		if not blink_tgt.is_empty() and blink_tgt.alive:
+		if not blink_tgt.is_empty() and blink_tgt.alive and int(blink_tgt.get("untargetable_until", 0)) <= tick:
 			return blink_tgt
-	return _nearest_angel(m.pos)
+	if not bool(m.get("pulled", false)):
+		return {}
+	return _highest_threat(m)
+
+
+func threat_of(mob_id: int, angel_id: int) -> int:
+	var mob := _ent(mob_id)
+	var angel := _ent(angel_id)
+	if mob.is_empty() or angel.is_empty():
+		return 0
+	return _effective_threat(mob, angel)
+
+
+func _highest_threat(m: Dictionary) -> Dictionary:
+	var best: Dictionary = {}
+	var best_t := -1
+	for a in _angels():
+		if not a.alive or int(a.get("untargetable_until", 0)) > tick:
+			continue
+		var t := _effective_threat(m, a)
+		if best.is_empty() or t > best_t or (t == best_t and _threat_tie(m, a, best)):
+			best = a
+			best_t = t
+	return best
+
+
+func _effective_threat(m: Dictionary, angel: Dictionary) -> int:
+	var table: Dictionary = m.get("threat", {})
+	var base := int(table.get(str(angel.id), 0))
+	if tick < taunt_until and int(m.id) == taunt_id and str(angel.subtype) == "michael":
+		var top := 0
+		for other in _angels():
+			if int(other.id) == int(angel.id):
+				continue
+			top = maxi(top, int(table.get(str(other.id), 0)))
+		return maxi(base, top) + Balance.TAUNT_SNAP
+	return base
+
+
+func _threat_tie(m: Dictionary, angel: Dictionary, best: Dictionary) -> bool:
+	var da := Fixed.dist(m.pos, angel.pos)
+	var db := Fixed.dist(m.pos, best.pos)
+	if da != db:
+		return da < db
+	return int(angel.id) < int(best.id)
+
+
+func _update_aggro(m: Dictionary) -> void:
+	if tick < taunt_until and int(m.id) == taunt_id:
+		m.pulled = true
+		return
+	if bool(m.get("pulled", false)):
+		if _should_leash(m):
+			m.pulled = false
+			m.threat = {}
+		return
+	if _angel_provokes(m):
+		m.pulled = true
+
+
+func _angel_provokes(m: Dictionary) -> bool:
+	var mroom := map.id_at_tile(Fixed.tile_of(m.pos))
+	for a in _angels():
+		if not a.alive or int(a.get("untargetable_until", 0)) > tick:
+			continue
+		if Fixed.dist(a.pos, m.pos) <= Balance.AGGRO_RANGE:
+			return true
+		if mroom != "" and not _room_corridor(mroom) and map.id_at_tile(Fixed.tile_of(a.pos)) == mroom:
+			return true
+	return false
+
+
+func _should_leash(m: Dictionary) -> bool:
+	var mroom := map.id_at_tile(Fixed.tile_of(m.pos))
+	for a in _angels():
+		if not a.alive:
+			continue
+		if Fixed.dist(a.pos, m.pos) <= Balance.LEASH_RANGE:
+			return false
+		if mroom != "" and not _room_corridor(mroom) and map.id_at_tile(Fixed.tile_of(a.pos)) == mroom:
+			return false
+	return true
+
+
+func _hold_post(m: Dictionary) -> void:
+	var home: Vector2i = m.get("spawn_pos", m.pos)
+	if Fixed.dist(m.pos, home) <= 80:
+		return
+	m.pos = _slide(m.pos, Fixed.step_toward(m.pos, home, int(m.speed)))
+
+
+func _room_corridor(id: String) -> bool:
+	var info = map.by_id.get(id, {})
+	return not info.is_empty() and bool(info.get("corridor", false))
+
+
+func _note_damage_threat(target: Dictionary, source_id: int, dealt: int) -> void:
+	if dealt <= 0 or source_id == 0:
+		return
+	if str(target.get("team", "")) != "demon" or str(target.get("kind", "")) != "mob":
+		return
+	var src := _ent(source_id)
+	if src.is_empty() or str(src.get("team", "")) != "angel":
+		return
+	target.pulled = true
+	var amount := dealt
+	if str(src.get("subtype", "")) == "michael":
+		amount = dealt * Balance.TANK_THREAT_MULT / 100
+	_add_threat(target, source_id, amount)
+
+
+func _threat_from_heal(source_id: int, amount: int) -> void:
+	if source_id == 0 or amount <= 0:
+		return
+	var pool := amount * Balance.HEAL_THREAT_PCT / 100
+	if pool <= 0:
+		return
+	var engaged: Array = []
+	for m in _living_mobs():
+		if str(m.kind) != "mob" or not bool(m.get("pulled", false)):
+			continue
+		engaged.append(m)
+	if engaged.is_empty():
+		return
+	engaged.sort_custom(func(a, b): return int(a.id) < int(b.id))
+	var each := pool / engaged.size()
+	var rem := pool - each * engaged.size()
+	for i in engaged.size():
+		var add := each
+		if i < rem:
+			add += 1
+		_add_threat(engaged[i], source_id, add)
+
+
+func _add_threat(mob: Dictionary, angel_id: int, amount: int) -> void:
+	if amount <= 0 or angel_id == 0:
+		return
+	if typeof(mob.get("threat", null)) != TYPE_DICTIONARY:
+		mob.threat = {}
+	var key := str(angel_id)
+	mob.threat[key] = int(mob.threat.get(key, 0)) + amount
+
+
+func _threat_sum(e: Dictionary) -> int:
+	var table = e.get("threat", {})
+	if typeof(table) != TYPE_DICTIONARY:
+		return 0
+	var total := 0
+	for k in table.keys():
+		total += int(table[k])
+	return total
+
+
+func _ally_code() -> int:
+	match ally_target:
+		"michael":
+			return 1
+		"raphael":
+			return 2
+		"azrael":
+			return 3
+		"uriel":
+			return 4
+		"gabriel":
+			return 5
+		_:
+			return 0
+
+
+func _heal_target(args: Dictionary) -> Dictionary:
+	var named := _named_angel(args, true)
+	if not named.is_empty():
+		return named
+	if ally_target != "":
+		var marked := _hero(ally_target)
+		if not marked.is_empty() and marked.alive:
+			return marked
+	return _lowest_living()
 
 
 func _cluster_count() -> int:

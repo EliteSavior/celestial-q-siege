@@ -14,6 +14,7 @@ var _built := false
 var _portraits := {}
 var _hp := {}
 var _bar := {}
+var _acts := {}
 var _stances := {}
 var _scatter: Button
 var _phalanx: Button
@@ -98,6 +99,11 @@ func build() -> void:
 	for i in cmds.size():
 		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
+	var act_names := ["taunt", "mend", "strike", "sunstrike"]
+	var act_labels := ["Taunt", "Mend", "Strike", "Sunstrike"]
+	for j in act_names.size():
+		var b3 := _btn(act_labels[j], Vector2(748 + j * 130, 540), Vector2(122, 72), _on_act.bind(act_names[j]))
+		_acts[act_names[j]] = b3
 	_build_portraits()
 	_build_brief()
 	_build_end()
@@ -204,6 +210,7 @@ func refresh(snap: Dictionary) -> void:
 	_phalanx.disabled = int(snap.phalanx_cd) > 0
 	_set_cd(_scatter, int(snap.scatter_cd), Balance.cooldown("scatter"))
 	_set_cd(_phalanx, int(snap.phalanx_cd), Balance.cooldown("phalanx"))
+	_refresh_acts(snap)
 	if _inspect == "":
 		_passive.text = ""
 		for cmd in _bar.keys():
@@ -245,6 +252,8 @@ func refresh(snap: Dictionary) -> void:
 			flags += " R%d" % int(hs.radiance)
 		if int(hs.get("shield", 0)) > 0:
 			flags += " +%d" % int(hs.shield)
+		if str(snap.get("ally_target", "")) == str(subtype):
+			flags += " TGT"
 		if str(hs.get("casting", "")) != "":
 			flags += " " + Balance.ability_label(str(hs.casting))
 		if bool(hs.get("downed", false)):
@@ -413,7 +422,8 @@ func _layout_wide(w: float, h: float) -> void:
 		_phalanx.size = Vector2(100, 48)
 	if _feed:
 		_feed.position = Vector2(210, h - 176.0)
-		_feed.size = Vector2(760, 56)
+		_feed.size = Vector2(520, 56)
+	_place_acts(false, w, h)
 	if _passive:
 		_passive.position = Vector2(210, h - 252.0)
 		_passive.size = Vector2(760, 22)
@@ -482,20 +492,21 @@ func _layout_narrow(w: float, h: float) -> void:
 		stance.position = Vector2(sx, stance_y)
 		sx += stance.size.x + gap
 	if _feed:
-		_feed.position = Vector2(16, h - 300.0)
-		_feed.size = Vector2(w - 32.0, 40)
+		_feed.position = Vector2(16, h - 306.0)
+		_feed.size = Vector2(w - 32.0, 18)
 	if _passive:
-		_passive.position = Vector2(16, h - 252.0)
-		_passive.size = Vector2(w - 32.0, 22)
+		_passive.position = Vector2(16, h - 306.0)
+		_passive.size = Vector2(w - 32.0, 18)
 	if _coach_bg:
-		_coach_bg.position = Vector2(16, h - 222.0)
-		_coach_bg.size = Vector2(w - 180.0, 40)
+		_coach_bg.position = Vector2(16, h - 284.0)
+		_coach_bg.size = Vector2(w - 180.0, 32)
 	if _coach:
-		_coach.position = Vector2(24, h - 216.0)
-		_coach.size = Vector2(maxi(w - 210.0, 80.0), 32)
+		_coach.position = Vector2(24, h - 280.0)
+		_coach.size = Vector2(maxi(w - 210.0, 80.0), 24)
 	if _hide:
-		_hide.position = Vector2(w - 156.0, h - 220.0)
-		_hide.size = Vector2(140, 36)
+		_hide.position = Vector2(w - 156.0, h - 284.0)
+		_hide.size = Vector2(140, 32)
+	_place_acts(true, w, h)
 
 
 func _build_portraits() -> void:
@@ -537,7 +548,7 @@ func _build_brief() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brief.add_child(title)
 	var l := Label.new()
-	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nStanding in a cleared room feeds the demon.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
+	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Mend, Strike, and Sunstrike sit on the bar. Tap a foe to focus. Tap a hero, then Mend, to heal that one.\nTap a portrait for that angel's kit. Attacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nStanding in a cleared room feeds the demon.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
 	l.position = Vector2(170, 104)
 	l.size = Vector2(940, 470)
 	l.clip_text = true
@@ -698,6 +709,66 @@ func _on_cmd(cmd: String) -> void:
 	game.command(cmd, {})
 
 
+func _on_act(which: String) -> void:
+	var ability := ""
+	match which:
+		"taunt":
+			ability = "taunt"
+		"mend":
+			ability = "single_heal"
+		"strike":
+			ability = "strike"
+		"sunstrike":
+			ability = "sunstrike"
+		_:
+			return
+	game.command("ability", {"name": ability})
+
+
+func _refresh_acts(snap: Dictionary) -> void:
+	var mapped := {
+		"taunt": "taunt",
+		"mend": "single_heal",
+		"strike": "strike",
+		"sunstrike": "sunstrike",
+	}
+	for key in mapped.keys():
+		if not _acts.has(key):
+			continue
+		var info: Dictionary = snap.abilities.get(str(mapped[key]), {})
+		if info.is_empty():
+			continue
+		_apply_ability_button(_acts[key], info)
+
+
+func _place_acts(narrow: bool, w: float, h: float) -> void:
+	var names := ["taunt", "mend", "strike", "sunstrike"]
+	if narrow:
+		var cmd_w := 100.0
+		var gap := 8.0
+		var count := names.size()
+		var total := float(count) * cmd_w + float(count - 1) * gap
+		if total > w - 16.0:
+			cmd_w = floor((w - 16.0 - float(count - 1) * gap) / float(count))
+			total = float(count) * cmd_w + float(count - 1) * gap
+		var x := (w - total) * 0.5
+		var y := h - 244.0
+		for i in names.size():
+			if not _acts.has(names[i]):
+				continue
+			var btn: Button = _acts[names[i]]
+			btn.position = Vector2(x, y)
+			btn.size = Vector2(cmd_w, 64)
+			x += cmd_w + gap
+		return
+	for i in names.size():
+		if not _acts.has(names[i]):
+			continue
+		var wide: Button = _acts[names[i]]
+		wide.position = Vector2(748 + i * 130, h - 180.0)
+		wide.size = Vector2(122, 72)
+
+
 func _on_portrait(subtype: String) -> void:
 	if _inspect == subtype:
 		_inspect = ""
@@ -795,6 +866,8 @@ func _apply_flashes() -> void:
 		buttons.append(_portraits[subtype])
 	for cmd in _bar.keys():
 		buttons.append(_bar[cmd])
+	for act in _acts.keys():
+		buttons.append(_acts[act])
 	for i in _stances.keys():
 		buttons.append(_stances[i])
 	buttons.append(_scatter)

@@ -75,6 +75,13 @@ func run_all() -> int:
 		"test_juice_stays_out_of_the_sim",
 		"test_human_policy_can_win",
 		"test_walking_past_the_kit_loses",
+		"test_threat_orders_the_target",
+		"test_taunt_snaps_threat",
+		"test_dps_elixir_attacks",
+		"test_tougher_mobs_take_seconds",
+		"test_single_heal_targets_the_chosen_hero",
+		"test_mobs_hold_until_aggro",
+		"test_new_acts_are_touchable",
 	]
 	ran = tests.size()
 	for name in tests:
@@ -3275,6 +3282,320 @@ func test_iso_screen_tile_roundtrip() -> void:
 		game.queue_free()
 		return
 	game.queue_free()
+
+
+func test_threat_orders_the_target() -> void:
+	var sim := _lab()
+	for a in sim._angels():
+		a.atk_cd = 9999
+	var az := sim._hero("azrael")
+	var michael := sim._hero("michael")
+	var raphael := sim._hero("raphael")
+	var mob := _mob(sim, "imp", michael.pos + Vector2i(200, 0), 800)
+	mob.pulled = true
+	sim._hurt(mob, 50, "single", int(az.id), false)
+	if int(mob.threat.get(str(az.id), 0)) != 50:
+		fail("damage threat %s" % str(mob.threat))
+		return
+	if str(sim._mob_target(mob).subtype) != "azrael":
+		fail("highest threat was not the target")
+		return
+	sim._hurt(mob, 20, "single", int(michael.id), false)
+	var mike := int(mob.threat.get(str(michael.id), 0))
+	if mike != 20 * Balance.TANK_THREAT_MULT / 100:
+		fail("tank threat %d" % mike)
+		return
+	if str(sim._mob_target(mob).subtype) != "michael":
+		fail("tank multiplier did not take aggro")
+		return
+	sim._hurt(mob, 200, "single", int(az.id), false)
+	if str(sim._mob_target(mob).subtype) != "azrael":
+		fail("over-damage did not pull aggro")
+		return
+	var idle := _mob(sim, "heavy", michael.pos + Vector2i(4000, 0), 800)
+	idle.pulled = false
+	var second := _mob(sim, "heavy", michael.pos + Vector2i(300, 0), 800)
+	second.pulled = true
+	raphael.hp = int(raphael.hp_max) - 40
+	sim._heal(raphael, 40, int(raphael.id))
+	var pool := 40 * Balance.HEAL_THREAT_PCT / 100
+	var lo: Dictionary = mob if int(mob.id) < int(second.id) else second
+	var hi: Dictionary = second if int(lo.id) == int(mob.id) else mob
+	var each := pool / 2
+	var rem := pool - each * 2
+	if int(lo.threat.get(str(raphael.id), 0)) != each + rem:
+		fail("heal threat on the lower id %s" % str(lo.threat))
+		return
+	if int(hi.threat.get(str(raphael.id), 0)) != each:
+		fail("heal threat on the higher id %s" % str(hi.threat))
+		return
+	if int(idle.threat.get(str(raphael.id), 0)) != 0:
+		fail("heal threat hit a mob that was holding")
+
+
+func test_taunt_snaps_threat() -> void:
+	var sim := _lab()
+	for a in sim._angels():
+		a.atk_cd = 9999
+	var michael := sim._hero("michael")
+	var az := sim._hero("azrael")
+	var mob := _mob(sim, "imp", sim._hero("raphael").pos + Vector2i(200, 0), 900)
+	mob.pulled = true
+	mob.threat = {str(az.id): 500, str(michael.id): 10}
+	if str(sim._mob_target(mob).subtype) != "azrael":
+		fail("setup did not give Azrael aggro")
+		return
+	_pay(sim, "taunt")
+	if sim.taunt_id != int(mob.id):
+		fail("taunt missed the mob on Raphael")
+		return
+	if str(sim._mob_target(mob).subtype) != "michael":
+		fail("taunt did not force Michael")
+		return
+	var snapped := sim.threat_of(int(mob.id), int(michael.id))
+	var az_t := sim.threat_of(int(mob.id), int(az.id))
+	if snapped <= az_t:
+		fail("snap %d did not clear %d" % [snapped, az_t])
+		return
+	if int(mob.threat.get(str(michael.id), 0)) != 10:
+		fail("snap was written into the table %s" % str(mob.threat))
+		return
+	sim.taunt_until = sim.tick
+	if str(sim._mob_target(mob).subtype) != "azrael":
+		fail("base threat did not resume when taunt ended")
+
+
+func test_dps_elixir_attacks() -> void:
+	var sim := _lab()
+	for a in sim._angels():
+		a.atk_cd = 9999
+	var az := sim._hero("azrael")
+	var uri := sim._hero("uriel")
+	var near := _mob(sim, "imp", az.pos + Vector2i(400, 0), 500)
+	var splash := _mob(sim, "imp", near.pos + Vector2i(Balance.SUNSTRIKE_RADIUS - 50, 0), 500)
+	var far := _mob(sim, "heavy", az.pos + Vector2i(6000, 0), 500)
+	_pay(sim, "strike")
+	var strike := sim._out_damage(Balance.STRIKE_DMG, int(az.id))
+	if 500 - int(near.hp) != strike:
+		fail("strike damage %d want %d" % [500 - int(near.hp), strike])
+		return
+	if int(splash.hp) != 500 or int(far.hp) != 500:
+		fail("strike was not single target")
+		return
+	near.hp = 500
+	near.pos = uri.pos + Vector2i(800, 0)
+	splash.pos = near.pos + Vector2i(Balance.SUNSTRIKE_RADIUS - 40, 0)
+	far.pos = uri.pos + Vector2i(8000, 0)
+	var gold := sim.golden
+	uri.cooldowns.erase("sunstrike")
+	sim.submit("ability", {"name": "sunstrike"})
+	sim.tick_once()
+	var expect := gold - Balance.cost("sunstrike") + Balance.golden_regen(sim.stage_reached)
+	if sim.golden != expect:
+		fail("sunstrike golden %d want %d (%s)" % [sim.golden, expect, _feed(sim)])
+		return
+	var primary := sim._out_damage(Balance.SUNSTRIKE_DMG, int(uri.id))
+	var splash_d := sim._out_damage(Balance.SUNSTRIKE_SPLASH, int(uri.id))
+	if 500 - int(near.hp) != primary:
+		fail("sunstrike primary %d want %d" % [500 - int(near.hp), primary])
+		return
+	if 500 - int(splash.hp) != splash_d:
+		fail("sunstrike splash %d want %d" % [500 - int(splash.hp), splash_d])
+		return
+	if int(far.hp) != 500:
+		fail("sunstrike reached a mob outside the splash")
+
+
+func test_tougher_mobs_take_seconds() -> void:
+	# 1.0.2 bodies: imp 34, heavy 260, elite 420. A focused party erased an imp
+	# in under a second. 1.0.3 wants a basic mob to last several seconds.
+	if Balance.IMP_HP < 34 * 4 or Balance.HEAVY_HP <= 260 or Balance.ELITE_HP <= 420:
+		fail("mob hp was not raised from 1.0.2 (imp %d heavy %d elite %d)" % [Balance.IMP_HP, Balance.HEAVY_HP, Balance.ELITE_HP])
+		return
+	var imp_ticks := _ttk("imp", Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE)
+	var heavy_ticks := _ttk("heavy", Balance.HEAVY_HP, Balance.HEAVY_ATK, Balance.HEAVY_PERIOD, Balance.HEAVY_RANGE)
+	var elite_ticks := _ttk("elite", Balance.ELITE_HP, Balance.ELITE_ATK, Balance.ELITE_PERIOD, Balance.ELITE_RANGE)
+	print("  ttk imp=%0.2fs heavy=%0.2fs elite=%0.2fs" % [float(imp_ticks) / 20.0, float(heavy_ticks) / 20.0, float(elite_ticks) / 20.0])
+	if imp_ticks < 20 * 4 or imp_ticks > 20 * 8:
+		fail("imp time to kill %0.2fs is outside 4–8s" % (float(imp_ticks) / 20.0))
+		return
+	if heavy_ticks <= imp_ticks:
+		fail("heavy %0.2fs was not slower than an imp %0.2fs" % [float(heavy_ticks) / 20.0, float(imp_ticks) / 20.0])
+		return
+	if elite_ticks <= heavy_ticks:
+		fail("elite %0.2fs was not slower than a heavy %0.2fs" % [float(elite_ticks) / 20.0, float(heavy_ticks) / 20.0])
+
+
+func test_single_heal_targets_the_chosen_hero() -> void:
+	var sim := _lab()
+	var gabriel := sim._hero("gabriel")
+	var uriel := sim._hero("uriel")
+	gabriel.hp = int(gabriel.hp_max) - 80
+	uriel.hp = int(uriel.hp_max) - 70
+	var g0 := int(gabriel.hp)
+	var u0 := int(uriel.hp)
+	var others := {}
+	for a in sim._angels():
+		if str(a.subtype) == "uriel":
+			continue
+		others[str(a.subtype)] = int(a.hp)
+	sim.submit("ally", {"target": "uriel"})
+	sim.tick_once()
+	if sim.ally_target != "uriel":
+		fail("tap did not mark Uriel for Mend")
+		return
+	sim._hero("raphael").cooldowns.erase("single_heal")
+	sim.golden = 9000
+	sim.submit("ability", {"name": "single_heal"})
+	sim.tick_once()
+	if int(uriel.hp) != u0 + Balance.HEAL_SINGLE:
+		fail("chosen heal landed %d want %d" % [int(uriel.hp) - u0, Balance.HEAL_SINGLE])
+		return
+	if int(gabriel.hp) != g0:
+		fail("single heal hit Gabriel, who was lower")
+		return
+	for a2 in sim._angels():
+		if str(a2.subtype) == "uriel":
+			continue
+		if int(a2.hp) != int(others[str(a2.subtype)]):
+			fail("single heal changed %s" % a2.subtype)
+			return
+
+
+func test_mobs_hold_until_aggro() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	var pos := Fixed.tile_center(sim.map.node_tile("summoned:center"))
+	sim._make_mob("imp", "Imp", pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], "summoned:center")
+	var imp: Dictionary = sim.entities[sim.next_id - 1]
+	imp.active_at = 0
+	var origin: Vector2i = imp.pos
+	for _i in 30:
+		sim.tick_once()
+	if imp.pos != origin or bool(imp.get("pulled", false)):
+		fail("imp chased from another room %s pulled=%s" % [imp.pos - origin, imp.get("pulled", false)])
+		return
+	sim.root_until = 99999
+	var uriel := sim._hero("uriel")
+	uriel.pos = imp.pos + Vector2i(Balance.AGGRO_RANGE + 600, 0)
+	uriel.atk_cd = 1
+	for a in sim._angels():
+		if str(a.subtype) != "uriel":
+			a.atk_cd = 99999
+	var hp := int(imp.hp)
+	sim.tick_once()
+	sim.tick_once()
+	if int(imp.hp) >= hp:
+		fail("Uriel did not shoot past aggro range")
+		return
+	if not bool(imp.get("pulled", false)):
+		fail("damage did not pull the imp")
+		return
+	if imp.pos == origin:
+		fail("pulled imp held still")
+
+
+func test_new_acts_are_touchable() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.hud._layout_bottom()
+	game._process(0.0)
+	var names := ["taunt", "mend", "strike", "sunstrike"]
+	for key in names:
+		if not game.hud._acts.has(key):
+			fail("command bar missing %s" % key)
+			game.queue_free()
+			return
+		var btn: Button = game.hud._acts[key]
+		var r: Rect2 = btn.get_rect()
+		if r.size.x < 64.0 or r.size.y < 64.0:
+			fail("%s touch target %s" % [key, r.size])
+			game.queue_free()
+			return
+		if r.position.x < 0.0 or r.position.y < 0.0 or r.end.x > 1280.0 or r.end.y > 720.0:
+			fail("%s sits outside 1280x720 %s" % [key, r])
+			game.queue_free()
+			return
+		if r.intersects(game.board.playfield_rect()):
+			fail("%s overlaps the playfield %s" % [key, r])
+			game.queue_free()
+			return
+	game.hud.size = Vector2(1080, 2400)
+	game.board.size = Vector2(1080, 2400)
+	game.hud._layout_bottom()
+	var play: Rect2 = game.board.playfield_rect()
+	for key2 in names:
+		var r2: Rect2 = game.hud._acts[key2].get_rect()
+		if r2.position.x < 0.0 or r2.position.y < 0.0 or r2.end.x > 1080.0 or r2.end.y > 2400.0:
+			fail("%s outside the phone %s" % [key2, r2])
+			game.queue_free()
+			return
+		if r2.intersects(play):
+			fail("%s overlaps the phone playfield %s vs %s" % [key2, r2, play])
+			game.queue_free()
+			return
+		if r2.size.y < 64.0:
+			fail("%s phone target %s" % [key2, r2.size])
+			game.queue_free()
+			return
+	game.hud.size = Vector2(1280, 720)
+	game.board.size = Vector2(1280, 720)
+	game.hud._layout_bottom()
+	var mob := _mob(game.sim, "imp", game.sim._hero("azrael").pos + Vector2i(300, 0), 500)
+	game.sim.golden = 9000
+	var queued := game.sim.queue.size()
+	game.hud._acts.strike.pressed.emit()
+	if game.sim.queue.size() <= queued or str(game.sim.queue.back().type) != "ability":
+		fail("strike tap did not submit")
+		game.queue_free()
+		return
+	if str(game.sim.queue.back().args.get("name", "")) != "strike":
+		fail("strike tap submitted %s" % str(game.sim.queue.back()))
+		game.queue_free()
+		return
+	game.sim.tick_once()
+	if int(mob.hp) == 500:
+		fail("strike tap did no damage")
+		game.queue_free()
+		return
+	game.sim.golden = 9000
+	game.sim._hero("michael").cooldowns.erase("taunt")
+	game.hud._acts.taunt.pressed.emit()
+	game.sim.tick_once()
+	if game.sim.taunt_until <= game.sim.tick:
+		fail("taunt tap did not force a target")
+	game.queue_free()
+
+
+func _ttk(subtype: String, hp: int, atk: int, period: int, mob_range: int) -> int:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.stance = CombatSim.STANCE_TIGHT
+	var michael := sim._hero("michael")
+	sim._make_mob(subtype, subtype, michael.pos, hp, atk, period, mob_range, 0, [], "start:center")
+	var mob: Dictionary = sim.entities[sim.next_id - 1]
+	mob.active_at = 0
+	mob.atk_cd = 99999
+	mob.pulled = true
+	var guard := 0
+	while bool(mob.alive) and guard < 20 * 40:
+		sim.tick_once()
+		guard += 1
+	return guard
 
 
 func _drive(policy, limit: int) -> Dictionary:
