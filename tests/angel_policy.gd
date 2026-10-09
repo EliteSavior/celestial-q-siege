@@ -4,9 +4,9 @@ extends RefCounted
 
 var step := 0
 var plan := [
-	"fork", "summoned", "cross", "seal",
-	"fork2", "summoned2", "cross2", "font",
-	"fork3", "summoned3", "cross3", "altar",
+	"fork", "trapped", "cross", "seal",
+	"fork2", "trapped2", "cross2", "font",
+	"fork3", "trapped3", "cross3", "altar",
 	"throne",
 ]
 var pulsed := {}

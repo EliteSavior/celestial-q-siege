@@ -5,9 +5,9 @@ extends RefCounted
 
 var step := 0
 var plan := [
-	"fork", "summoned", "cross", "seal",
-	"fork2", "summoned2", "cross2", "font",
-	"fork3", "summoned3", "cross3", "altar",
+	"fork", "trapped", "cross", "seal",
+	"fork2", "trapped2", "cross2", "font",
+	"fork3", "trapped3", "cross3", "altar",
 	"throne",
 ]
 
@@ -22,7 +22,17 @@ func act(sim) -> void:
 	var room := str(sim.party_room())
 	var info: Dictionary = sim.map.by_id.get(room, {})
 	if sim._hostiles_in_room(room) > 0 and not bool(info.get("corridor", false)):
-		sim.submit("move_tile", {"tile": Fixed.tile_of(sim.anchor)})
+		var joined := false
+		for id in sim.order:
+			var e: Dictionary = sim.entities[id]
+			if str(e.get("kind", "")) == "mob" and bool(e.get("alive", false)) and bool(e.get("pulled", false)):
+				joined = true
+				break
+		var center: Vector2i = sim.map.node_tile("%s:center" % room)
+		if not joined and center != Vector2i.ZERO and Fixed.tile_of(sim.anchor) != center:
+			sim.submit("move_tile", {"tile": center})
+		else:
+			sim.submit("move_tile", {"tile": Fixed.tile_of(sim.anchor)})
 		return
 	var goal := _goal(sim)
 	if goal != "" and goal != room:
