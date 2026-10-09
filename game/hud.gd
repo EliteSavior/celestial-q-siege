@@ -56,7 +56,16 @@ var _menu_title: Button
 var _menu_resume: Button
 var _menu_held_pause := false
 var _speed_i := 0
-const _SPEEDS := [1.0, 2.0, 3.0]
+const _SPEEDS := [1.0, 2.0, 3.0, 4.0]
+var _spawn_l: Label
+var _seed_l: Label
+var _feed_bg: ColorRect
+var _debug_btn: Button
+var _debug_dim: ColorRect
+var _debug_log_panel: ColorRect
+var _debug_log: TextEdit
+var _debug_open := false
+var _log_open := false
 const ROLE_VERB := {
 	"michael": "Taunt",
 	"raphael": "Heal",
@@ -85,8 +94,18 @@ func build() -> void:
 	_boss.visible = false
 	_boss_l = _label(Vector2(780, 80), "", 16)
 	_boss_l.size = Vector2(360, 26)
+	_feed_bg = ColorRect.new()
+	_feed_bg.color = Color(0.05, 0.04, 0.08, 0.94)
+	_feed_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_feed_bg)
 	_feed = _label(Vector2(210, 548), "", 15)
-	_feed.size = Vector2(760, 56)
+	_feed.size = Vector2(760, 88)
+	_feed.clip_text = false
+	_feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_spawn_l = _label(Vector2(210, 100), "", 16)
+	_spawn_l.size = Vector2(420, 24)
+	_seed_l = _label(Vector2(640, 100), "", 16)
+	_seed_l.size = Vector2(220, 24)
 	_passive = _label(Vector2(210, 508), "", 14)
 	_passive.size = Vector2(760, 22)
 	_coach_bg = ColorRect.new()
@@ -121,15 +140,20 @@ func build() -> void:
 	for i in cmds.size():
 		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
-	var act_names := ["taunt", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
-	var act_labels := ["Taunt", "Heal", "Team", "Strike", "Sunstrike", "Block", "Revive", "Dash", "Beam", "Zone", "Retreat", "Aegis", "Rescue"]
+	var act_names := ["taunt", "shield", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
+	var act_labels := ["Taunt", "Shield", "Heal", "Team", "Strike", "Sunstrike", "Block", "Revive", "Dash", "Beam", "Zone", "Retreat", "Aegis", "Rescue"]
 	for j in act_names.size():
 		var b3 := _btn(act_labels[j], Vector2(748 + j * 130, 540), Vector2(122, 72), _on_act.bind(act_names[j]))
 		_acts[act_names[j]] = b3
+	for cmd in _bar.keys():
+		var hidden: Button = _bar[cmd]
+		hidden.visible = false
+		hidden.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_portraits()
 	_build_brief()
 	_build_end()
 	_build_menu()
+	_build_debug()
 	_layout_bottom()
 
 
@@ -149,6 +173,12 @@ func on_new_run(to_title: bool) -> void:
 		_brief.mouse_filter = Control.MOUSE_FILTER_STOP if to_title else Control.MOUSE_FILTER_IGNORE
 	if _pause:
 		_pause.text = "Pause"
+	_speed_i = 0
+	if _speed:
+		_speed.text = "1x"
+	if _debug_dim:
+		_debug_dim.visible = false
+	_debug_open = false
 	if _menu_dim:
 		_menu_dim.visible = false
 	_menu_held_pause = false
@@ -222,11 +252,20 @@ func refresh(snap: Dictionary) -> void:
 				_boss_l.text += "  wave %d" % wave.size()
 			if int(snap.get("echo_traps", 0)) > 0:
 				_boss_l.text += "  traps %d" % int(snap.echo_traps)
-	var lines: Array = snap.feed.slice(maxi(snap.feed.size() - 2, 0), snap.feed.size())
+	var lines: Array = snap.feed.slice(maxi(snap.feed.size() - 4, 0), snap.feed.size())
 	var text := ""
 	for row in lines:
 		text += str(row.text) + "\n"
 	_feed.text = text
+	var spawn_in := int(snap.get("next_spawn_in", -1))
+	if _spawn_l:
+		if spawn_in < 0:
+			_spawn_l.text = ""
+		else:
+			_spawn_l.text = "Next spawn in %0.1fs" % (float(spawn_in) / 20.0)
+	if _seed_l:
+		_seed_l.text = "Seed %d" % int(snap.get("seed", 1))
+	_refresh_debug(snap)
 	_style_stances(int(snap.stance))
 	_scatter.text = "Scatter\n%s" % _cd(int(snap.scatter_cd))
 	_phalanx.text = "Phalanx\n%s" % _cd(int(snap.phalanx_cd))
@@ -359,9 +398,9 @@ func refresh(snap: Dictionary) -> void:
 			_victory_mark.visible = true
 			_defeat_mark.visible = false
 			_again.text = "Siege again"
-			_end_label.text = "Lucifer falls. The siege breaks.\n\n%s    revives %d\nEcho %s    wave %d    traps %d" % [
-				clock, int(snap.stats.revives), str(snap.echo_style),
-				snap.get("echo_units", []).size(), int(snap.get("echo_traps", 0))
+			_end_label.text = "Lucifer falls. The siege breaks.\n\n%s    revives %d    seed %d\nEcho %s    wave %d    traps %d\n%s" % [
+				clock, int(snap.stats.revives), int(snap.get("seed", 1)), str(snap.echo_style),
+				snap.get("echo_units", []).size(), int(snap.get("echo_traps", 0)), _report_text(snap)
 			]
 		else:
 			_end.color = Color(0.12, 0.02, 0.03, 0.94)
@@ -371,7 +410,7 @@ func refresh(snap: Dictionary) -> void:
 			var where := str(stage_names[stage_i])
 			if str(snap.phase) == "lucifer":
 				where = "the throne"
-			_end_label.text = "The party is extinguished.\n\n%s    fell in %s\n%s" % [clock, where, room]
+			_end_label.text = "The party is extinguished.\n\n%s    fell in %s    seed %d\n%s\n%s" % [clock, where, int(snap.get("seed", 1)), room, _report_text(snap)]
 	else:
 		_end.visible = false
 
@@ -473,52 +512,77 @@ func _place_meters(w: float) -> void:
 
 func _layout_wide(w: float, h: float) -> void:
 	_place_meters(w)
-	var act_y := h - 164.0
-	var util_y := h - 96.0
+	var act_y := h - 156.0
+	var util_y := h - 80.0
+	var coach_y := act_y - 64.0
+	var log_y := coach_y - 96.0
 	_place_row(_util_buttons(), util_y, 72.0, w, 8.0)
 	_place_acts(act_y, 64.0, w, 8.0)
-	var coach_y := h - 232.0
-	if _feed:
-		_feed.position = Vector2(210, coach_y - 36.0)
-		_feed.size = Vector2(maxi(w - 380.0, 200.0), 32)
+	_place_log(Vector2(210, log_y), Vector2(maxi(w - 380.0, 200.0), 88.0))
 	if _passive:
-		_passive.position = Vector2(210, coach_y - 18.0)
+		_passive.position = Vector2(210, log_y - 20.0)
 		_passive.size = Vector2(maxi(w - 380.0, 200.0), 18)
 	if _coach_bg:
 		_coach_bg.position = Vector2(210, coach_y)
-		_coach_bg.size = Vector2(maxi(w - 210.0 - 156.0, 80.0), 64)
+		_coach_bg.size = Vector2(maxi(w - 210.0 - 156.0, 80.0), 56)
 	if _coach:
-		_coach.position = Vector2(218, coach_y + 16.0)
-		_coach.size = Vector2(maxi(w - 400.0, 80.0), 32)
+		_coach.position = Vector2(218, coach_y + 4.0)
+		_coach.size = Vector2(maxi(w - 400.0, 80.0), 48)
+		_coach.clip_text = false
+		_coach.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _hide:
 		_hide.position = Vector2(w - 148.0, coach_y)
-		_hide.size = Vector2(140, 64)
+		_hide.size = Vector2(140, 56)
 	_place_column()
+	_place_debug_button()
 
 
 func _layout_narrow(w: float, h: float) -> void:
 	_place_meters(w)
-	var coach_y := h - 300.0
-	var act_y := h - 160.0
-	var util_y := h - 92.0
+	var act_y := h - 156.0
+	var util_y := h - 80.0
+	var coach_y := act_y - 64.0
+	var log_y := coach_y - 96.0
 	_place_acts(act_y, 64.0, w, 8.0)
 	_place_row(_util_buttons(), util_y, 72.0, w, 8.0)
-	if _feed:
-		_feed.position = Vector2(16, coach_y - 20.0)
-		_feed.size = Vector2(w - 32.0, 18)
+	_place_log(Vector2(16, log_y), Vector2(w - 32.0, 88.0))
 	if _passive:
-		_passive.position = Vector2(16, coach_y - 20.0)
+		_passive.position = Vector2(16, log_y - 20.0)
 		_passive.size = Vector2(w - 32.0, 18)
 	if _coach_bg:
 		_coach_bg.position = Vector2(16, coach_y)
-		_coach_bg.size = Vector2(maxi(w - 180.0, 80.0), 64)
+		_coach_bg.size = Vector2(maxi(w - 180.0, 80.0), 56)
 	if _coach:
-		_coach.position = Vector2(24, coach_y + 16.0)
-		_coach.size = Vector2(maxi(w - 210.0, 80.0), 32)
+		_coach.position = Vector2(24, coach_y + 4.0)
+		_coach.size = Vector2(maxi(w - 210.0, 80.0), 48)
+		_coach.clip_text = false
+		_coach.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _hide:
 		_hide.position = Vector2(w - 148.0, coach_y)
-		_hide.size = Vector2(132, 64)
+		_hide.size = Vector2(132, 56)
 	_place_column()
+	_place_debug_button()
+
+
+func _place_log(at: Vector2, sz: Vector2) -> void:
+	if _feed_bg:
+		_feed_bg.position = at
+		_feed_bg.size = sz
+	if _feed:
+		_feed.position = at + Vector2(8, 4)
+		_feed.size = Vector2(maxi(sz.x - 16.0, 40.0), sz.y - 8.0)
+		_feed.clip_text = false
+
+
+func _place_debug_button() -> void:
+	if _debug_btn == null:
+		return
+	_debug_btn.visible = Dev.ENABLED
+	if not Dev.ENABLED:
+		return
+	var zoom_y := 8.0 + 5.0 * 74.0 + 8.0
+	_debug_btn.position = Vector2(8, zoom_y + 96.0)
+	_debug_btn.size = Vector2(176, 48)
 
 
 func _place_column() -> void:
@@ -558,11 +622,7 @@ func _stance_buttons() -> Array:
 
 
 func _util_buttons() -> Array:
-	var row := _stance_buttons()
-	for cmd in ["shield", "heal", "cleanse", "detect", "burst"]:
-		if _bar.has(cmd):
-			row.append(_bar[cmd])
-	return row
+	return _stance_buttons()
 
 
 func _place_row(buttons: Array, y: float, bh: float, w: float, left: float) -> void:
@@ -632,7 +692,7 @@ func _build_brief() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brief.add_child(title)
 	var l := Label.new()
-	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Heal, Team, Strike, and Sunstrike sit on the bar. Team heals every living angel.\nHeal arms Raphael's single heal; tap a hero to cast it. Zoom − and + sit under the portraits.\nEvery rite is on the bar. Tapping a portrait only aims a single-target rite.\nAttacks are automatic. Downed lasts 3 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nThe antechamber is quiet. The first fight starts in the next room.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
+	l.text = "Five angels, one squad, against an AI Lucifer. The clock starts when you begin.\n\nTap the floor to move. Tap a door to commit for 3 seconds.\nStill air is traps. Skittering is summons. Whispers is curses.\nA gold arrow points at the next doorway.\n\nShield, Heal, Cleanse, Detect, and Burst spend Golden Elixir.\nTaunt, Heal, Team, Strike, and Sunstrike sit on the bar. Team heals every living angel.\nHeal arms Raphael's single heal; tap a hero to cast it. Zoom − and + sit under the portraits.\nEvery rite is on the bar. Tapping a portrait only aims a single-target rite.\nAttacks are automatic. Downed lasts 10 seconds.\n\nHold the gold node for a stake: a seal, a cleanse, or a revive.\nTight, Spread, or Column is the bet. Scatter and Phalanx answer a tell.\nThe antechamber is quiet. The first fight starts in the next room.\n\nLucifer rises for 3 seconds, then four marked blows.\nKill him to win. A wiped party loses.\nMenu, at the top right, restarts the run or returns here."
 	l.position = Vector2(170, 104)
 	l.size = Vector2(940, 470)
 	l.clip_text = true
@@ -673,9 +733,11 @@ func _build_end() -> void:
 	_end.add_child(_defeat_mark)
 	_end_label = Label.new()
 	_end_label.position = Vector2(260, 230)
-	_end_label.size = Vector2(760, 200)
+	_end_label.size = Vector2(860, 280)
 	_end_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_end_label.add_theme_font_size_override("font_size", 26)
+	_end_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_end_label.clip_text = false
+	_end_label.add_theme_font_size_override("font_size", 18)
 	_end_label.add_theme_color_override("font_color", Color(0.94, 0.91, 0.84))
 	_end_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_end.add_child(_end_label)
@@ -698,6 +760,190 @@ func _passive_line(subtype: String) -> String:
 			return "Gabriel — passive: a small damage aura for the whole party."
 		_:
 			return ""
+
+
+func _report_text(snap: Dictionary) -> String:
+	var report: Dictionary = snap.get("hero_report", {})
+	var lines: Array = []
+	for subtype in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
+		var row: Dictionary = report.get(subtype, {})
+		lines.append("%s  dmg %d  heal %d  threat %d  taken %d" % [
+			subtype.capitalize(), int(row.get("damage", 0)), int(row.get("healing", 0)),
+			int(row.get("threat", 0)), int(row.get("taken", 0)),
+		])
+	return "\n".join(lines)
+
+
+func _build_debug() -> void:
+	_debug_btn = _btn("Debug", Vector2(8, 520), Vector2(176, 48), _on_debug)
+	_debug_btn.visible = Dev.ENABLED
+	_debug_dim = ColorRect.new()
+	_debug_dim.color = Color(0.03, 0.02, 0.06, 0.92)
+	_debug_dim.visible = false
+	_debug_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_debug_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_debug_dim)
+	var title := Label.new()
+	title.text = "Debug"
+	title.position = Vector2(24, 8)
+	title.size = Vector2(400, 36)
+	title.add_theme_font_size_override("font_size", 28)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_debug_dim.add_child(title)
+	var close := _btn("Close", Vector2(900, 8), Vector2(140, 48), _on_debug_close, _debug_dim)
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(16, 64)
+	scroll.size = Vector2(700, 620)
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	_debug_dim.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(660, 0)
+	scroll.add_child(box)
+	_debug_row(box, "Spawn imp", _on_debug_spawn.bind("imp"))
+	_debug_row(box, "Spawn swarm", _on_debug_spawn.bind("swarm"))
+	_debug_row(box, "Spawn heavy", _on_debug_spawn.bind("heavy"))
+	_debug_row(box, "Spawn elite", _on_debug_spawn.bind("elite"))
+	_debug_row(box, "Curses on", _on_debug_curses.bind(true))
+	_debug_row(box, "Curses off", _on_debug_curses.bind(false))
+	_debug_row(box, "Traps on", _on_debug_traps.bind(true))
+	_debug_row(box, "Traps off", _on_debug_traps.bind(false))
+	_debug_row(box, "God mode", _on_debug_cmd.bind("debug_god", {}))
+	_debug_row(box, "Infinite elixir", _on_debug_cmd.bind("debug_infinite", {}))
+	_debug_row(box, "Full heal + revive", _on_debug_cmd.bind("debug_heal", {}))
+	_debug_row(box, "Fill Dread", _on_debug_cmd.bind("debug_dread", {"fill": true}))
+	_debug_row(box, "Empty Dread", _on_debug_cmd.bind("debug_dread", {"fill": false}))
+	_debug_row(box, "Force summon", _on_debug_cmd.bind("debug_summon", {}))
+	for room in ["start", "fork", "trapped", "summoned", "cursed", "seal", "font", "altar", "throne"]:
+		_debug_row(box, "Teleport %s" % room, _on_debug_cmd.bind("debug_teleport", {"room": room}))
+	_debug_row(box, "Toggle log", _on_debug_log)
+	_debug_row(box, "Replay this seed", _on_debug_replay)
+	_debug_log_panel = ColorRect.new()
+	_debug_log_panel.color = Color(0.02, 0.02, 0.04, 0.92)
+	_debug_log_panel.visible = false
+	_debug_log_panel.position = Vector2(740, 64)
+	_debug_log_panel.size = Vector2(500, 620)
+	_debug_log_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_debug_dim.add_child(_debug_log_panel)
+	_debug_log = TextEdit.new()
+	_debug_log.editable = false
+	_debug_log.position = Vector2(8, 8)
+	_debug_log.size = Vector2(484, 604)
+	_debug_log.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_debug_log.scroll_fit_content_height = false
+	_debug_log_panel.add_child(_debug_log)
+	close.move_to_front()
+
+
+func _debug_row(box: VBoxContainer, label: String, cb: Callable) -> void:
+	var b := Button.new()
+	b.text = label
+	b.custom_minimum_size = Vector2(280, 48)
+	b.pressed.connect(cb)
+	box.add_child(b)
+
+
+func _on_debug() -> void:
+	if not Dev.ENABLED:
+		return
+	_debug_open = true
+	_debug_dim.visible = true
+	if game:
+		game.paused = true
+
+
+func _on_debug_close() -> void:
+	_debug_open = false
+	_debug_dim.visible = false
+	if game:
+		game.paused = false
+
+
+func _on_debug_spawn(unit: String) -> void:
+	_on_debug_cmd("debug_spawn", {"unit": unit})
+
+
+func _on_debug_curses(on: bool) -> void:
+	_on_debug_cmd("debug_curses", {"on": on})
+
+
+func _on_debug_traps(on: bool) -> void:
+	_on_debug_cmd("debug_traps", {"on": on})
+
+
+func _on_debug_cmd(type: String, args: Dictionary) -> void:
+	if game == null or not Dev.ENABLED:
+		return
+	game.command(type, args)
+
+
+func _threat_by_hero(snap: Dictionary) -> Dictionary:
+	var out := {}
+	var meter: Dictionary = snap.get("threat", {})
+	for row in meter.get("rows", []):
+		if typeof(row) == TYPE_DICTIONARY:
+			out[str(row.get("subtype", ""))] = int(row.get("threat", 0))
+	return out
+
+
+func _on_debug_log() -> void:
+	_log_open = not _log_open
+	if _debug_log_panel:
+		_debug_log_panel.visible = _log_open
+
+
+func _on_debug_replay() -> void:
+	if game:
+		_debug_dim.visible = false
+		_debug_open = false
+		game.restart()
+
+
+func _refresh_debug(snap: Dictionary) -> void:
+	if not Dev.ENABLED:
+		return
+	var lines: Array = snap.get("debug_lines", [])
+	var threat_of := _threat_by_hero(snap)
+	var file := FileAccess.open("user://debug_log.txt", FileAccess.WRITE)
+	if file:
+		file.store_line("tick %s speed %s seed %s" % [snap.get("tick", 0), game.speed if game else 1, snap.get("seed", 1)])
+		file.store_line("golden %s dark %s regen g %s d %s god %s infinite %s curses %s traps %s" % [
+			snap.get("golden", 0), snap.get("dark", 0), snap.get("golden_regen", 0), snap.get("dark_regen", 0),
+			snap.get("god_mode", false), snap.get("infinite_elixir", false), snap.get("curses_on", true), snap.get("traps_on", true),
+		])
+		var heroes: Dictionary = snap.get("heroes", {})
+		for subtype in heroes.keys():
+			var hs: Dictionary = heroes[subtype]
+			file.store_line("hero %s hp %s/%s threat %s downed %s final %s silence %s rot %s mark %s weaken %s" % [
+				subtype, hs.get("hp", 0), hs.get("hp_max", 0), int(threat_of.get(str(subtype), 0)),
+				hs.get("downed", false), hs.get("final_death", false),
+				hs.get("silence", false), hs.get("rot", false), hs.get("mark", false), hs.get("weaken", false),
+			])
+		for foe in snap.get("debug_foes", []):
+			file.store_line("foe %s %s hp %s/%s target %s room %s" % [foe.get("subtype", ""), foe.get("name", ""), foe.get("hp", 0), foe.get("hp_max", 0), foe.get("target", ""), foe.get("room", "")])
+		for row in lines:
+			file.store_line("%s %s" % [row.get("tick", 0), row.get("text", "")])
+	if _debug_log == null or not _log_open:
+		return
+	var meter: Dictionary = snap.get("threat", {})
+	var body := "tick %s  speed %s  seed %s\n" % [snap.get("tick", 0), game.speed if game else 1, snap.get("seed", 1)]
+	body += "Golden %s (+%s)  Dread %s (+%s)  god %s  elixir %s\n" % [
+		snap.get("golden", 0), snap.get("golden_regen", 0), snap.get("dark", 0), snap.get("dark_regen", 0),
+		snap.get("god_mode", false), snap.get("infinite_elixir", false),
+	]
+	body += "aggro %s  reason %s\n" % [meter.get("holder", ""), meter.get("reason", "")]
+	var heroes2: Dictionary = snap.get("heroes", {})
+	for subtype2 in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
+		var hs2: Dictionary = heroes2.get(subtype2, {})
+		body += "%s hp %s/%s threat %s sil %s rot %s mark %s weak %s\n" % [
+			subtype2, hs2.get("hp", 0), hs2.get("hp_max", 0), int(threat_of.get(subtype2, 0)),
+			hs2.get("silence", false), hs2.get("rot", false), hs2.get("mark", false), hs2.get("weaken", false),
+		]
+	for foe2 in snap.get("debug_foes", []):
+		body += "foe %s %s/%s -> %s @ %s\n" % [foe2.get("name", ""), foe2.get("hp", 0), foe2.get("hp_max", 0), foe2.get("target", ""), foe2.get("room", "")]
+	for row2 in lines:
+		body += "%s %s\n" % [row2.get("tick", 0), row2.get("text", "")]
+	_debug_log.text = body
+	_debug_log.set_caret_line(maxi(_debug_log.get_line_count() - 1, 0))
 
 
 func _build_menu() -> void:
@@ -808,6 +1054,8 @@ func _act_ability(which: String) -> String:
 	match which:
 		"taunt":
 			return "taunt"
+		"shield":
+			return "shield_wall"
 		"mend":
 			return "single_heal"
 		"team":
@@ -840,10 +1088,13 @@ func _on_act(which: String) -> void:
 	var ability := _act_ability(which)
 	if ability == "":
 		return
-	if which == "team":
+	if which == "team" or which == "shield":
 		if game != null:
 			game.armed = ""
-		game.command("ability", {"name": ability})
+		if which == "shield":
+			game.command("shield", {})
+		else:
+			game.command("ability", {"name": ability})
 		return
 	_arm_or_fire(ability)
 
@@ -869,7 +1120,7 @@ func _refresh_acts(snap: Dictionary) -> void:
 
 
 func _place_acts(y: float, bh: float, w: float, left: float) -> void:
-	var names := ["taunt", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
+	var names := ["taunt", "shield", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
 	var row: Array = []
 	for name in names:
 		if _acts.has(name):

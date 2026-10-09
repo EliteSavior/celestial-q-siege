@@ -7,10 +7,10 @@ const TILE_W := 64.0
 const TILE_H := 32.0
 const INSET_L := 196.0
 const INSET_T := 120.0
-const INSET_B := 236.0
+const INSET_B := 320.0
 const INSET_R := 8.0
 const NARROW_W := 1200.0
-const NARROW_INSET_B := 308.0
+const NARROW_INSET_B := 340.0
 
 const TELL_COLOR := {
 	"silence": Color(0.38, 0.66, 1.0),
@@ -90,6 +90,8 @@ var _flash_until := {}
 
 
 var guide_drawn := false
+var _world: Control
+var _pen: CanvasItem
 
 
 func _ready() -> void:
@@ -97,7 +99,12 @@ func _ready() -> void:
 	# InputEventScreenTouch to this control; a full-rect IGNORE sibling lets
 	# them fall through to whatever STOP control is behind it.
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	RenderingServer.canvas_item_set_clip(get_canvas_item(), true)
+	_world = _WorldLayer.new()
+	_world.board = self
+	_world.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_world.clip_contents = true
+	add_child(_world)
+	_pen = _world
 
 
 func zoom_level() -> float:
@@ -399,7 +406,6 @@ func _door_at(snap_in: Dictionary) -> Vector2i:
 
 
 func _draw_guide(font) -> void:
-	guide_drawn = false
 	var g := guide(snap)
 	var at: Vector2i = g.at
 	if at == Vector2i.ZERO:
@@ -417,14 +423,14 @@ func _draw_guide(font) -> void:
 		tip = start + dir * 36.0
 	var pulse := 0.72 + 0.28 * sin(float(Time.get_ticks_msec()) / 180.0)
 	var col := Color(1.0, 0.84, 0.22, pulse)
-	draw_line(start, tip, col, 6.0)
+	_line(start, tip, col, 6.0)
 	var side := Vector2(-dir.y, dir.x)
 	var head := PackedVector2Array([
 		tip + dir * 4.0,
 		tip - dir * 16.0 + side * 11.0,
 		tip - dir * 16.0 - side * 11.0,
 	])
-	draw_colored_polygon(head, col)
+	_fill_poly(head, col)
 	if font:
 		var tag := "MOVE"
 		match str(g.kind):
@@ -483,11 +489,79 @@ func _draw() -> void:
 	guide_drawn = false
 	if snap.is_empty() or game == null:
 		return
-	var font := ThemeDB.fallback_font
 	var view_pos := _view_origin()
 	var view_size := _view_size()
-	RenderingServer.canvas_item_set_custom_rect(get_canvas_item(), true, Rect2(view_pos, view_size))
-	draw_rect(Rect2(view_pos, view_size), Color(0.03, 0.03, 0.05))
+	if _world:
+		_world.position = view_pos
+		_world.size = view_size
+		_world.queue_redraw()
+	var g := guide(snap)
+	if g.at != Vector2i.ZERO:
+		guide_drawn = true
+
+
+func _ci() -> RID:
+	return _pen.get_canvas_item()
+
+
+func _set_xform(offset: Vector2, rot: float, scale: Vector2) -> void:
+	var t := Transform2D(rot, offset)
+	t.x *= scale.x
+	t.y *= scale.y
+	RenderingServer.canvas_item_add_set_transform(_ci(), t)
+
+
+func _fill_rect(rect: Rect2, color: Color) -> void:
+	RenderingServer.canvas_item_add_rect(_ci(), rect, color)
+
+
+func _line(a: Vector2, b: Vector2, color: Color, width: float = 1.0) -> void:
+	RenderingServer.canvas_item_add_line(_ci(), a, b, color, width)
+
+
+func _fill_circle(center: Vector2, radius: float, color: Color) -> void:
+	RenderingServer.canvas_item_add_circle(_ci(), center, radius, color)
+
+
+func _fill_poly(points: PackedVector2Array, color: Color) -> void:
+	var colors := PackedColorArray()
+	colors.resize(points.size())
+	colors.fill(color)
+	RenderingServer.canvas_item_add_polygon(_ci(), points, colors)
+
+
+func _text(font, pos: Vector2, text: String, align: HorizontalAlignment, width: float, size: int, color: Color) -> void:
+	if font == null or text == "":
+		return
+	font.draw_string(_ci(), pos, text, align, width, size, color)
+
+
+func _poly_line(points: PackedVector2Array, color: Color, width: float) -> void:
+	var colors := PackedColorArray()
+	colors.resize(points.size())
+	colors.fill(color)
+	RenderingServer.canvas_item_add_polyline(_ci(), points, colors, width)
+
+
+func _arc(center: Vector2, radius: float, start: float, end_ang: float, point_count: int, color: Color, width: float) -> void:
+	var n := maxi(point_count, 2)
+	var prev := center + Vector2(cos(start), sin(start)) * radius
+	for i in range(1, n + 1):
+		var t := start + (end_ang - start) * float(i) / float(n)
+		var nxt := center + Vector2(cos(t), sin(t)) * radius
+		_line(prev, nxt, color, width)
+		prev = nxt
+
+
+func _paint_world() -> void:
+	if snap.is_empty() or game == null:
+		return
+	_pen = _world if _world != null else self
+	var font := ThemeDB.fallback_font
+	var view_pos := _view_origin()
+	_set_xform(Vector2(-view_pos.x, -view_pos.y), 0.0, Vector2.ONE)
+	var view_size := _view_size()
+	_fill_rect(Rect2(view_pos, view_size), Color(0.03, 0.03, 0.05))
 	var map = game.sim.map
 	var vis := {}
 	for id in snap.visible:
@@ -548,7 +622,7 @@ func _draw() -> void:
 		var prev := _milli_screen(snap.anchor)
 		for tile in snap.path:
 			var p2 := _tile_center_screen(tile.x, tile.y)
-			draw_line(prev, p2, Color(0.95, 0.9, 0.6, 0.55), 2.0)
+			_line(prev, p2, Color(0.95, 0.9, 0.6, 0.55), 2.0)
 			prev = p2
 	for zone in snap.zones:
 		var colz := Color(0.95, 0.35, 0.12, 0.28) if str(zone.subtype) == "hell" else Color(0.95, 0.85, 0.4, 0.28)
@@ -559,13 +633,13 @@ func _draw() -> void:
 		var remain_c := maxi(0, int(commit.land) - int(snap.tick))
 		var frac_c := 1.0 - float(remain_c) / float(total)
 		var arm: Color = TELL_COLOR.commit
-		draw_arc(cp, 28.0, -PI * 0.5, -PI * 0.5 + TAU * frac_c, 28, arm, 5.0)
-		draw_circle(cp, 10.0, Color(arm.r, arm.g, arm.b, 0.35))
+		_arc(cp, 28.0, -PI * 0.5, -PI * 0.5 + TAU * frac_c, 28, arm, 5.0)
+		_fill_circle(cp, 10.0, Color(arm.r, arm.g, arm.b, 0.35))
 		if font:
 			var label := "ELITE" if str(commit.plan) == "elite" else "TRAP CLUSTER"
 			_plaque(font, cp + Vector2(-52, -36), "%s  %0.1fs" % [label, float(remain_c) / 20.0], arm, Color(0.08, 0.03, 0.05, 0.9), 16)
 		for piece in commit.get("pieces", []):
-			draw_circle(_milli_screen(piece.pos), 7.0, Color(1.0, 0.5, 0.2, 0.55))
+			_fill_circle(_milli_screen(piece.pos), 7.0, Color(1.0, 0.5, 0.2, 0.55))
 	for curse in snap.get("curses", []):
 		var cpos := _milli_screen(curse.pos)
 		var crest := maxi(0, int(curse.land) - int(snap.tick))
@@ -573,8 +647,8 @@ func _draw() -> void:
 		var span := Balance.CURSE_CAST_MARK if sub == "mark" else Balance.CURSE_CAST
 		var cfrac := 1.0 - float(crest) / float(maxi(span, 1))
 		var cc: Color = TELL_COLOR.get(sub, Color(0.72, 0.45, 0.95))
-		draw_arc(cpos, 30.0, -PI * 0.5, -PI * 0.5 + TAU * cfrac, 24, cc, 5.0)
-		draw_circle(cpos, 8.0, Color(cc.r, cc.g, cc.b, 0.35))
+		_arc(cpos, 30.0, -PI * 0.5, -PI * 0.5 + TAU * cfrac, 24, cc, 5.0)
+		_fill_circle(cpos, 8.0, Color(cc.r, cc.g, cc.b, 0.35))
 		if font:
 			var who := str(curse.get("name", ""))
 			_plaque(font, cpos + Vector2(-46, 40), "%s  %s  %0.1fs" % [TELL_LABEL.get(sub, sub), who, float(crest) / 20.0], cc, Color(0.04, 0.03, 0.08, 0.9), 15)
@@ -590,7 +664,8 @@ func _draw() -> void:
 		if font:
 			if hint != "":
 				_plaque(font, sp + Vector2(-34, -28), hint, Color(0.08, 0.06, 0.04), hc2, 15)
-			draw_string(font, sp + Vector2(-40, 18), str(ex2.label), HORIZONTAL_ALIGNMENT_LEFT, 120, 12, Color(1, 0.97, 0.88))
+			_text(font, sp + Vector2(-40, 18), str(ex2.label), HORIZONTAL_ALIGNMENT_LEFT, 120, 12, Color(1, 0.97, 0.88))
+	var pop_at := {}
 	for pop in snap.popups:
 		if font:
 			var age := int(snap.tick) - int(pop.tick)
@@ -602,9 +677,13 @@ func _draw() -> void:
 				colp = Color(0.4, 1.0, 0.52)
 			elif kind == "dmg":
 				colp = Color(1.0, 0.92, 0.45)
-			var at := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.4)
-			draw_string(font, at + Vector2(1, 1), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0, 0, 0, 0.85))
-			draw_string(font, at, str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, colp)
+			var key := "%s,%s" % [pop.pos.x, pop.pos.y]
+			var n := int(pop_at.get(key, 0))
+			pop_at[key] = n + 1
+			var fan := Vector2(float(n % 3 - 1) * 28.0, -float(n / 3) * 18.0)
+			var at := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.4) + fan
+			_text(font, at + Vector2(1, 1), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0, 0, 0, 0.85))
+			_text(font, at, str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, colp)
 	_draw_guide(font)
 	if str(snap.banner) != "" and font:
 		var bp := view_pos + Vector2(12, 36)
@@ -618,16 +697,16 @@ func _draw() -> void:
 		_plaque(font, view_pos + Vector2(view_size.x * 0.5 - 70, 36), TELL_LABEL.echo, TELL_COLOR.echo, Color(0.1, 0.05, 0.02, 0.92), 18)
 	if bool(snap.channeling) and font:
 		var stake_name := str(snap.get("stake_name", "the stake"))
-		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Channeling %s  %d%%" % [stake_name, int(snap.altar_progress)], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
+		_text(font, view_pos + Vector2(12, view_size.y - 16), "Channeling %s  %d%%" % [stake_name, int(snap.altar_progress)], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
 	elif bool(snap.get("channeling_shrine", false)) and font:
-		draw_string(font, view_pos + Vector2(12, view_size.y - 16), "Purifying shrine  %d%%" % int(snap.get("shrine_progress", 0)), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.55, 0.95, 0.9))
+		_text(font, view_pos + Vector2(12, view_size.y - 16), "Purifying shrine  %d%%" % int(snap.get("shrine_progress", 0)), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.55, 0.95, 0.9))
 
 
 func _draw_kits(font) -> void:
 	if bool(snap.get("beam_on", false)):
 		var a0 := _milli_screen(snap.beam_from)
 		var a1 := _milli_screen(snap.beam_aim)
-		draw_line(a0, a1, Color(1.0, 0.82, 0.35, 0.9), 6.0)
+		_line(a0, a1, Color(1.0, 0.82, 0.35, 0.9), 6.0)
 		if font:
 			_plaque(font, a1 + Vector2(8, -8), "URIEL  beam  drag", Color(0.15, 0.1, 0.02), Color(1.0, 0.86, 0.4), 14)
 	if bool(snap.get("shield_wall", false)):
@@ -637,7 +716,7 @@ func _draw_kits(font) -> void:
 			var mid := mp + Fixed.rotate_facing(Vector2i(700, 0), face)
 			var left := mid + Fixed.rotate_facing(Vector2i(0, -1100), face)
 			var right := mid + Fixed.rotate_facing(Vector2i(0, 1100), face)
-			draw_line(_milli_screen(left), _milli_screen(right), Color(0.55, 0.78, 1.0, 0.95), 7.0)
+			_line(_milli_screen(left), _milli_screen(right), Color(0.55, 0.78, 1.0, 0.95), 7.0)
 			if font:
 				_plaque(font, _milli_screen(mid) + Vector2(-36, -16), "MICHAEL  shield", Color(0.04, 0.08, 0.16), Color(0.7, 0.84, 1.0), 14)
 	var tid := int(snap.get("taunt_id", 0))
@@ -645,7 +724,7 @@ func _draw_kits(font) -> void:
 		var mp2 := _hero_pos("michael")
 		var foe := _unit_pos(tid)
 		if mp2 != Vector2i.ZERO and foe != Vector2i.ZERO:
-			draw_line(_milli_screen(mp2), _milli_screen(foe), Color(0.95, 0.35, 0.25, 0.9), 3.0)
+			_line(_milli_screen(mp2), _milli_screen(foe), Color(0.95, 0.35, 0.25, 0.9), 3.0)
 			if font:
 				_plaque(font, _milli_screen(foe) + Vector2(8, -18), "TAUNT", Color(0.16, 0.04, 0.03), Color(1.0, 0.45, 0.3), 13)
 	_draw_casts(font)
@@ -667,8 +746,8 @@ func _draw_transform(font) -> void:
 	var p := _milli_screen(boss)
 	var remain := maxi(0, int(snap.transform_until) - int(snap.tick))
 	var frac := 1.0 - float(remain) / float(maxi(Balance.TRANSFORM_CAST, 1))
-	draw_arc(p, 42.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 32, TELL_COLOR.transform, 6.0)
-	draw_circle(p, 30.0, Color(0.7, 0.05, 0.08, 0.4))
+	_arc(p, 42.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 32, TELL_COLOR.transform, 6.0)
+	_fill_circle(p, 30.0, Color(0.7, 0.05, 0.08, 0.4))
 	if font:
 		_plaque(font, p + Vector2(-70, -50), "%s  %0.1fs" % [TELL_LABEL.transform, float(remain) / 20.0], TELL_COLOR.transform, Color(0.1, 0.02, 0.03, 0.92), 18)
 
@@ -683,7 +762,7 @@ func _draw_telegraphs(font) -> void:
 	if boss != Vector2i.ZERO:
 		var remain_b := maxi(0, int(tg.get("until", 0)) - int(snap.tick))
 		var frac_b := 1.0 - float(remain_b) / float(maxi(Balance.BOSS_TELL, 1))
-		draw_arc(_milli_screen(boss), 40.0, -PI * 0.5, -PI * 0.5 + TAU * frac_b, 32, tell, 6.0)
+		_arc(_milli_screen(boss), 40.0, -PI * 0.5, -PI * 0.5 + TAU * frac_b, 32, tell, 6.0)
 	if name == "hell_rain":
 		var marked := 0
 		for mark in snap.hell_rain:
@@ -699,24 +778,24 @@ func _draw_telegraphs(font) -> void:
 			var aim: Vector2i = tg.get("aim", snap.anchor)
 			end = Fixed.approach(origin, aim, Balance.CLEAVE_LENGTH)
 		if origin != Vector2i.ZERO and end != Vector2i.ZERO:
-			draw_line(_milli_screen(origin), _milli_screen(end), Color(tell.r, tell.g, tell.b, 0.75), 22.0)
+			_line(_milli_screen(origin), _milli_screen(end), Color(tell.r, tell.g, tell.b, 0.75), 22.0)
 			if font:
 				_plaque(font, _milli_screen(end) + Vector2(6, -8), "LEAVE", Color(0.16, 0.06, 0.02), tell, 14)
 	elif name == "judgment":
 		var tgt := _unit_pos(int(tg.get("target", 0)))
 		if tgt != Vector2i.ZERO:
-			draw_circle(_milli_screen(tgt), 32, Color(tell.r, tell.g, tell.b, 0.4))
+			_fill_circle(_milli_screen(tgt), 32, Color(tell.r, tell.g, tell.b, 0.4))
 			if font:
 				_plaque(font, _milli_screen(tgt) + Vector2(-28, -40), "SHIELD", Color(0.12, 0.08, 0.02), tell, 14)
 			if boss != Vector2i.ZERO:
-				draw_line(_milli_screen(boss), _milli_screen(tgt), Color(tell.r, tell.g, tell.b, 0.9), 3.0)
+				_line(_milli_screen(boss), _milli_screen(tgt), Color(tell.r, tell.g, tell.b, 0.9), 3.0)
 	elif name == "grasp":
 		if boss != Vector2i.ZERO:
-			draw_arc(_milli_screen(boss), 78, 0, TAU, 32, Color(tell.r, tell.g, tell.b, 0.85), 3.0)
-			draw_circle(_milli_screen(boss), 74, Color(tell.r, tell.g, tell.b, 0.18))
+			_arc(_milli_screen(boss), 78, 0, TAU, 32, Color(tell.r, tell.g, tell.b, 0.85), 3.0)
+			_fill_circle(_milli_screen(boss), 74, Color(tell.r, tell.g, tell.b, 0.18))
 			for angel in snap.angels:
 				if bool(angel.alive):
-					draw_line(_milli_screen(boss), _milli_screen(angel.pos), Color(tell.r, tell.g, tell.b, 0.7), 3.0)
+					_line(_milli_screen(boss), _milli_screen(angel.pos), Color(tell.r, tell.g, tell.b, 0.7), 3.0)
 			if font:
 				_plaque(font, _milli_screen(boss) + Vector2(-36, -88), "PHALANX", Color(0.12, 0.02, 0.06), tell, 14)
 	if font:
@@ -737,13 +816,13 @@ func _draw_placeholder(p: Vector2, subtype: String, col: Color, radius: float, f
 				p + Vector2(0, radius * 1.25),
 				p + Vector2(-radius * 0.85, radius * 0.7),
 			])
-			draw_colored_polygon(shield, col)
-			draw_line(p + Vector2(0, -radius * 0.1), p + Vector2(0, radius * 0.7), ink, 2.0)
-			draw_line(p + Vector2(-radius * 0.45, radius * 0.15), p + Vector2(radius * 0.45, radius * 0.15), ink, 2.0)
+			_fill_poly(shield, col)
+			_line(p + Vector2(0, -radius * 0.1), p + Vector2(0, radius * 0.7), ink, 2.0)
+			_line(p + Vector2(-radius * 0.45, radius * 0.15), p + Vector2(radius * 0.45, radius * 0.15), ink, 2.0)
 		"raphael":
-			draw_circle(p, radius * 0.72, col)
-			draw_line(p + Vector2(0, -radius), p + Vector2(0, radius), Color(0.9, 1, 0.9), 3.0)
-			draw_line(p + Vector2(-radius * 0.7, 0), p + Vector2(radius * 0.7, 0), Color(0.9, 1, 0.9), 3.0)
+			_fill_circle(p, radius * 0.72, col)
+			_line(p + Vector2(0, -radius), p + Vector2(0, radius), Color(0.9, 1, 0.9), 3.0)
+			_line(p + Vector2(-radius * 0.7, 0), p + Vector2(radius * 0.7, 0), Color(0.9, 1, 0.9), 3.0)
 		"azrael":
 			var blade := PackedVector2Array([
 				p + Vector2(0, -radius * 1.2),
@@ -751,47 +830,47 @@ func _draw_placeholder(p: Vector2, subtype: String, col: Color, radius: float, f
 				p + Vector2(0, radius * 0.55),
 				p + Vector2(-radius * 0.35, radius * 0.15),
 			])
-			draw_colored_polygon(blade, col)
-			draw_line(p + Vector2(0, radius * 0.4), p + Vector2(0, radius * 1.15), ink, 3.0)
+			_fill_poly(blade, col)
+			_line(p + Vector2(0, radius * 0.4), p + Vector2(0, radius * 1.15), ink, 3.0)
 		"uriel":
 			var star := PackedVector2Array()
 			for i in 8:
 				var a := -PI * 0.5 + TAU * float(i) / 8.0
 				var r := radius * (1.15 if i % 2 == 0 else 0.45)
 				star.append(p + Vector2(cos(a) * r, sin(a) * r))
-			draw_colored_polygon(star, col)
+			_fill_poly(star, col)
 		"gabriel":
-			draw_circle(p, radius * 0.62, col)
-			draw_arc(p + Vector2(0, -radius * 0.15), radius * 0.95, PI, TAU, 16, Color(1, 0.95, 0.7), 3.0)
+			_fill_circle(p, radius * 0.62, col)
+			_arc(p + Vector2(0, -radius * 0.15), radius * 0.95, PI, TAU, 16, Color(1, 0.95, 0.7), 3.0)
 		"imp":
 			var horn := PackedVector2Array([
 				p + Vector2(0, -radius * 1.15),
 				p + Vector2(radius, radius * 0.7),
 				p + Vector2(-radius, radius * 0.7),
 			])
-			draw_colored_polygon(horn, col)
-			draw_circle(p + Vector2(-radius * 0.28, -radius * 0.15), 2.2, ink)
-			draw_circle(p + Vector2(radius * 0.28, -radius * 0.15), 2.2, ink)
+			_fill_poly(horn, col)
+			_fill_circle(p + Vector2(-radius * 0.28, -radius * 0.15), 2.2, ink)
+			_fill_circle(p + Vector2(radius * 0.28, -radius * 0.15), 2.2, ink)
 		"heavy":
-			draw_rect(Rect2(p + Vector2(-radius, -radius * 0.85), Vector2(radius * 2.0, radius * 1.7)), col)
-			draw_rect(Rect2(p + Vector2(-radius * 1.35, -radius * 0.2), Vector2(radius * 0.4, radius * 0.35)), col)
-			draw_rect(Rect2(p + Vector2(radius * 0.95, -radius * 0.2), Vector2(radius * 0.4, radius * 0.35)), col)
+			_fill_rect(Rect2(p + Vector2(-radius, -radius * 0.85), Vector2(radius * 2.0, radius * 1.7)), col)
+			_fill_rect(Rect2(p + Vector2(-radius * 1.35, -radius * 0.2), Vector2(radius * 0.4, radius * 0.35)), col)
+			_fill_rect(Rect2(p + Vector2(radius * 0.95, -radius * 0.2), Vector2(radius * 0.4, radius * 0.35)), col)
 		"elite":
-			draw_colored_polygon(PackedVector2Array([
+			_fill_poly(PackedVector2Array([
 				p + Vector2(0, -radius * 1.2),
 				p + Vector2(radius, 0),
 				p + Vector2(0, radius * 1.2),
 				p + Vector2(-radius, 0),
 			]), col)
-			draw_line(p + Vector2(-radius * 0.7, -radius * 0.7), p + Vector2(radius * 0.7, radius * 0.7), ink, 2.0)
-			draw_line(p + Vector2(radius * 0.7, -radius * 0.7), p + Vector2(-radius * 0.7, radius * 0.7), ink, 2.0)
+			_line(p + Vector2(-radius * 0.7, -radius * 0.7), p + Vector2(radius * 0.7, radius * 0.7), ink, 2.0)
+			_line(p + Vector2(radius * 0.7, -radius * 0.7), p + Vector2(-radius * 0.7, radius * 0.7), ink, 2.0)
 		"lucifer":
-			draw_circle(p, radius * 0.7, col)
+			_fill_circle(p, radius * 0.7, col)
 			for i in 5:
 				var a2 := -PI * 0.5 + TAU * float(i) / 5.0
-				draw_line(p, p + Vector2(cos(a2) * radius * 1.35, sin(a2) * radius * 1.35), col, 4.0)
+				_line(p, p + Vector2(cos(a2) * radius * 1.35, sin(a2) * radius * 1.35), col, 4.0)
 		_:
-			draw_circle(p, radius * (0.9 if foe else 0.75), col)
+			_fill_circle(p, radius * (0.9 if foe else 0.75), col)
 
 
 func nudge_zoom(dir: int) -> void:
@@ -806,40 +885,40 @@ func _draw_unit(u: Dictionary, col: Color, font, foe: bool) -> void:
 	var flashing := _flash_until.has(int(u.get("id", 0))) and Time.get_ticks_msec() < int(_flash_until[int(u.get("id", 0))])
 	if flashing:
 		col = col.lightened(0.7)
-		draw_arc(p, radius + 7.0, 0, TAU, 16, Color(1.0, 0.96, 0.75, 0.9), 3.0)
+		_arc(p, radius + 7.0, 0, TAU, 16, Color(1.0, 0.96, 0.75, 0.9), 3.0)
 	if bool(u.get("spawning", false)):
 		col.a = 0.55
-		draw_arc(p, radius + 10, 0, TAU, 18, TELL_COLOR.echo, 3.0)
+		_arc(p, radius + 10, 0, TAU, 18, TELL_COLOR.echo, 3.0)
 	if foe and int(u.id) == int(snap.focus_id):
-		draw_arc(p, radius + 8, 0, TAU, 18, Color(1, 1, 1, 0.9), 2.0)
+		_arc(p, radius + 8, 0, TAU, 18, Color(1, 1, 1, 0.9), 2.0)
 	_draw_placeholder(p, str(u.subtype), col, radius, foe)
 	if bool(u.get("mark", false)):
-		draw_arc(p, radius + 5, 0, TAU, 16, Color(1, 0.2, 0.25), 2.0)
+		_arc(p, radius + 5, 0, TAU, 16, Color(1, 0.2, 0.25), 2.0)
 	if bool(u.get("silence", false)):
-		draw_arc(p, radius + 8, 0, TAU, 12, Color(0.6, 0.7, 1.0), 2.0)
+		_arc(p, radius + 8, 0, TAU, 12, Color(0.6, 0.7, 1.0), 2.0)
 	if bool(u.get("weaken", false)):
-		draw_arc(p, radius + 11, PI, TAU, 8, Color(0.7, 0.55, 0.85), 2.0)
+		_arc(p, radius + 11, PI, TAU, 8, Color(0.7, 0.55, 0.85), 2.0)
 	if bool(u.get("rot", false)):
-		draw_arc(p, radius + 11, 0, PI, 8, Color(0.45, 0.7, 0.3), 2.0)
+		_arc(p, radius + 11, 0, PI, 8, Color(0.45, 0.7, 0.3), 2.0)
 	var hp := float(maxi(int(u.hp), 0))
 	var mx := float(maxi(int(u.hp_max), 1))
 	var w := 56.0 if foe else 40.0
 	var bar_h := 10.0 if foe else 6.0
 	var bar_y := -radius - 16.0 if foe else -radius - 12.0
-	draw_rect(Rect2(p + Vector2(-w * 0.5 - 1, bar_y - 1), Vector2(w + 2, bar_h + 2)), Color(0, 0, 0, 0.85))
+	_fill_rect(Rect2(p + Vector2(-w * 0.5 - 1, bar_y - 1), Vector2(w + 2, bar_h + 2)), Color(0, 0, 0, 0.85))
 	var hp_col := Color(0.4, 0.88, 0.45) if not foe else Color(0.95, 0.28, 0.22)
 	if hp / mx < 0.35:
 		hp_col = Color(0.95, 0.78, 0.18)
 	if hp / mx < 0.15:
 		hp_col = Color(0.95, 0.28, 0.22)
-	draw_rect(Rect2(p + Vector2(-w * 0.5, bar_y), Vector2(w * hp / mx, bar_h)), hp_col)
+	_fill_rect(Rect2(p + Vector2(-w * 0.5, bar_y), Vector2(w * hp / mx, bar_h)), hp_col)
 	if foe and font:
-		draw_string(font, p + Vector2(-w * 0.5, bar_y - 2), "%d/%d" % [int(hp), int(mx)], HORIZONTAL_ALIGNMENT_LEFT, w, 13, Color(1, 0.96, 0.9))
+		_text(font, p + Vector2(-w * 0.5, bar_y - 2), "%d/%d" % [int(hp), int(mx)], HORIZONTAL_ALIGNMENT_LEFT, w, 13, Color(1, 0.96, 0.9))
 	if font and (str(u.subtype) == "lucifer" or str(u.subtype) == "elite" or not foe):
 		var tag := str(u.name)[0] if not foe else str(u.subtype)
 		if str(u.subtype) == "lucifer":
 			tag = "L"
-		draw_string(font, p + Vector2(-4, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.05, 0.04, 0.08))
+		_text(font, p + Vector2(-4, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.05, 0.04, 0.08))
 	if foe and bool(u.get("spawning", false)) and font:
 		_plaque(font, p + Vector2(-22, 24), "ECHO", TELL_COLOR.echo, Color(0.1, 0.05, 0.02, 0.9), 12)
 	_draw_statuses(u, font, p, radius)
@@ -862,7 +941,7 @@ func _draw_statuses(u: Dictionary, _font, anchor: Vector2, radius: float) -> voi
 	var x := anchor.x - total_w * 0.5
 	var y := anchor.y - radius - 38.0
 	for st in shown:
-		StatusRow.draw_icon(self, Rect2(x, y, box, box), st)
+		StatusRow.draw_icon(_pen, Rect2(x, y, box, box), st)
 		x += box + gap
 
 
@@ -1053,14 +1132,14 @@ func _draw_tile_diamond(center: Vector2, col: Color, inset: float = 0.86) -> voi
 		center + Vector2(0, hh),
 		center + Vector2(-hw, 0),
 	])
-	draw_colored_polygon(pts, col)
+	_fill_poly(pts, col)
 	var hi := col.lightened(0.28)
 	var lo := col.darkened(0.35)
 	var edge := maxf(1.25, 1.6 * zoom)
-	draw_line(pts[0], pts[1], hi, edge)
-	draw_line(pts[0], pts[3], hi, edge)
-	draw_line(pts[1], pts[2], lo, edge)
-	draw_line(pts[3], pts[2], lo, edge)
+	_line(pts[0], pts[1], hi, edge)
+	_line(pts[0], pts[3], hi, edge)
+	_line(pts[1], pts[2], lo, edge)
+	_line(pts[3], pts[2], lo, edge)
 
 
 func _world_radii(radius_milli: float) -> Vector2:
@@ -1080,11 +1159,11 @@ func _draw_world_disk(center_milli: Vector2i, radius_milli: float, fill: Color, 
 		var a := TAU * float(i) / float(n)
 		pts[i] = center + Vector2(cos(a) * radii.x, sin(a) * radii.y)
 	if fill.a > 0.0:
-		draw_colored_polygon(pts, fill)
+		_fill_poly(pts, fill)
 	if ring.a > 0.0:
 		var closed := pts.duplicate()
 		closed.append(pts[0])
-		draw_polyline(closed, ring, width)
+		_poly_line(closed, ring, width)
 
 
 func _draw_actors(font) -> void:
@@ -1108,26 +1187,26 @@ func _draw_actors(font) -> void:
 			if aim != "" and bool(u.get("pulled", false)):
 				var who := _hero_pos(aim)
 				if who != Vector2i.ZERO:
-					draw_line(_milli_screen(u.pos), _milli_screen(who), Color(0.95, 0.35, 0.28, 0.45), 2.0)
+					_line(_milli_screen(u.pos), _milli_screen(who), Color(0.95, 0.35, 0.28, 0.45), 2.0)
 			var blink = u.get("blink", {})
 			if blink is Dictionary and not blink.is_empty():
-				draw_line(_milli_screen(u.pos), _milli_screen(blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
-				draw_circle(_milli_screen(blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
+				_line(_milli_screen(u.pos), _milli_screen(blink.pos), Color(1, 0.3, 0.8, 0.8), 2.0)
+				_fill_circle(_milli_screen(blink.pos), 10, Color(1, 0.3, 0.8, 0.35))
 		elif not bool(u.alive):
 			_draw_unit(u, Color(0.25, 0.25, 0.28), font, false)
 			if bool(u.get("downed", false)):
 				var p_down := _milli_screen(u.pos)
 				var left := int(u.get("downed_left", 0))
 				var frac := float(left) / float(maxi(int(snap.get("downed_ticks", 60)), 1))
-				draw_arc(p_down, 18.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 24, Color(1.0, 0.45, 0.18), 3.0)
+				_arc(p_down, 18.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 24, Color(1.0, 0.45, 0.18), 3.0)
 				if font:
-					draw_string(font, p_down + Vector2(-12, 28), "%0.1f" % (float(left) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.62, 0.3))
+					_text(font, p_down + Vector2(-12, 28), "%0.1f" % (float(left) / 20.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.62, 0.3))
 		else:
 			var col: Color = HERO_COLOR.get(str(u.subtype), Color.WHITE)
 			if int(u.id) == int(snap.focus_id):
-				draw_circle(_milli_screen(u.pos), 22, Color(1, 1, 1, 0.15))
+				_fill_circle(_milli_screen(u.pos), 22, Color(1, 1, 1, 0.15))
 			if str(snap.get("ally_target", "")) == str(u.subtype):
-				draw_arc(_milli_screen(u.pos), 18.0, 0, TAU, 20, Color(0.45, 0.95, 0.55, 0.95), 2.0)
+				_arc(_milli_screen(u.pos), 18.0, 0, TAU, 20, Color(0.45, 0.95, 0.55, 0.95), 2.0)
 			_draw_unit(u, col, font, false)
 
 
@@ -1142,7 +1221,7 @@ func _draw_trap_actor(trap: Dictionary, font) -> void:
 		var arm_at := int(trap.get("arm_at", 0))
 		var remain_a := maxi(0, arm_at - int(snap.tick))
 		var frac_a := 1.0 - float(remain_a) / float(maxi(Balance.BOSS_TELL, 1))
-		draw_arc(c3, 22.0, -PI * 0.5, -PI * 0.5 + TAU * frac_a, 24, TELL_COLOR.echo, 4.0)
+		_arc(c3, 22.0, -PI * 0.5, -PI * 0.5 + TAU * frac_a, 24, TELL_COLOR.echo, 4.0)
 		if font:
 			_plaque(font, c3 + Vector2(-36, -22), "ECHO  %0.1fs" % (float(remain_a) / 20.0), TELL_COLOR.echo, Color(0.08, 0.04, 0.02, 0.9), 14)
 	elif font:
@@ -1184,15 +1263,15 @@ func _draw_trap_glyph(c: Vector2, kind: String, col: Color) -> void:
 	match kind:
 		"spike":
 			var pts := PackedVector2Array([c + Vector2(0, -13), c + Vector2(12, 10), c + Vector2(-12, 10)])
-			draw_colored_polygon(pts, col)
+			_fill_poly(pts, col)
 		"snare":
-			draw_line(c + Vector2(-11, -11), c + Vector2(11, 11), col, 3.0)
-			draw_line(c + Vector2(-11, 11), c + Vector2(11, -11), col, 3.0)
+			_line(c + Vector2(-11, -11), c + Vector2(11, 11), col, 3.0)
+			_line(c + Vector2(-11, 11), c + Vector2(11, -11), col, 3.0)
 		"hellflame":
-			draw_circle(c, 10, col)
-			draw_arc(c, 16, 0, TAU, 18, Color(1.0, 0.8, 0.25), 2.0)
+			_fill_circle(c, 10, col)
+			_arc(c, 16, 0, TAU, 18, Color(1.0, 0.8, 0.25), 2.0)
 		_:
-			draw_rect(Rect2(c - Vector2(8, 8), Vector2(16, 16)), col)
+			_fill_rect(Rect2(c - Vector2(8, 8), Vector2(16, 16)), col)
 
 
 func _draw_fog_edge(tx: int, ty: int, vis: Dictionary, map, center: Vector2) -> void:
@@ -1215,12 +1294,20 @@ func _draw_fog_edge(tx: int, ty: int, vis: Dictionary, map, center: Vector2) -> 
 				hidden = false
 		if not hidden:
 			continue
-		draw_line(edges[i], edges[i + 1], ink, maxf(3.0, 4.0 * zoom))
+		_line(edges[i], edges[i + 1], ink, maxf(3.0, 4.0 * zoom))
+
+
+class _WorldLayer:
+	extends Control
+	var board
+	func _draw() -> void:
+		if board:
+			board._paint_world()
 
 
 func _plaque(font, at: Vector2, text: String, fg: Color, bg: Color, sz: int) -> void:
 	if font == null or text == "":
 		return
 	var ts: Vector2 = font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, sz)
-	draw_rect(Rect2(at + Vector2(-5, -sz + 1), Vector2(ts.x + 10, float(sz) + 8)), bg)
-	draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, fg)
+	_fill_rect(Rect2(at + Vector2(-5, -sz + 1), Vector2(ts.x + 10, float(sz) + 8)), bg)
+	_text(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, fg)

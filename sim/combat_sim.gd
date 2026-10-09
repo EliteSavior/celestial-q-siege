@@ -105,6 +105,14 @@ var idle_ticks := 0
 var corruption := false
 var corruption_warned := false
 var turtle_clock := 0
+var curse_grace_until := 0
+var run_seed := 1
+var god_mode := false
+var infinite_elixir := false
+var curses_enabled := true
+var traps_enabled := true
+var hero_report := {}
+var debug_log: Array = []
 
 var traps_placed := 0
 var spawns_placed := 0
@@ -212,6 +220,13 @@ func reset() -> void:
 	corruption = false
 	corruption_warned = false
 	turtle_clock = 0
+	curse_grace_until = 0
+	god_mode = false
+	infinite_elixir = false
+	curses_enabled = true
+	traps_enabled = true
+	hero_report = {}
+	debug_log = []
 	traps_placed = 0
 	spawns_placed = 0
 	curses_cast = 0
@@ -242,7 +257,10 @@ func reset() -> void:
 	party_room_id = "start"
 	_prev_room = "start"
 	_spawn_heroes()
+	for spec in _HERO:
+		hero_report[str(spec.subtype)] = {"damage": 0, "healing": 0, "threat": 0, "taken": 0}
 	_log("The siege begins. Three forks, three stakes, then the throne.", "info")
+	debug_line("seed %d" % run_seed)
 
 
 func submit(type: String, args: Dictionary = {}, who: String = "angel", delay: int = 1) -> void:
@@ -359,6 +377,26 @@ func _exec(c: Dictionary) -> void:
 			_cmd_boss(str(args.get("button", "")))
 		"commit":
 			_cmd_commit(args)
+		"debug_spawn":
+			_cmd_debug_spawn(args)
+		"debug_god":
+			_cmd_debug_flag("god")
+		"debug_infinite":
+			_cmd_debug_flag("infinite")
+		"debug_heal":
+			_cmd_debug_heal()
+		"debug_dread":
+			_cmd_debug_dread(bool(args.get("fill", true)))
+		"debug_summon":
+			_cmd_debug_spawn({"unit": "swarm"})
+		"debug_teleport":
+			_cmd_debug_teleport(str(args.get("room", "")))
+		"debug_curses":
+			_cmd_debug_toggle("curses", bool(args.get("on", true)))
+		"debug_traps":
+			_cmd_debug_toggle("traps", bool(args.get("on", true)))
+		"debug_seed":
+			_cmd_debug_seed(int(args.get("seed", run_seed)))
 		_:
 			_fail("Unknown command.")
 
@@ -715,59 +753,46 @@ func _cmd_steer(pos: Vector2i) -> void:
 
 
 func _do_cleanse() -> bool:
-	# One curse per cast. Corruption, then Silence, Rot, Mark, Weaken.
+	# One cast clears every curse on the party, including every Rot stack.
 	# A snare is a trap root, not a curse, and is left in place.
-	var best: Dictionary = {}
-	var best_pri := 0
-	var best_kind := ""
-	if corruption:
-		best_pri = 5
-		best_kind = "corruption"
+	var any := corruption
 	for a in _angels():
-		if not a.alive:
-			continue
-		var kind := ""
-		var pri := 0
-		if int(a.silence_until) > tick:
-			kind = "silence"
-			pri = 4
-		elif int(a.rot_until) > tick:
-			kind = "rot"
-			pri = 3
-		elif int(a.mark_until) > tick:
-			kind = "mark"
-			pri = 2
-		elif int(a.get("weaken_until", 0)) > tick:
-			kind = "weaken"
-			pri = 1
-		if pri > best_pri:
-			best = a
-			best_pri = pri
-			best_kind = kind
-	if best_kind == "" or (best_kind != "corruption" and best.is_empty()):
+		if _hero_cursed(a):
+			any = true
+			break
+	if not any:
 		_fail("Nothing to cleanse.")
 		return false
-	if best_kind == "corruption":
-		corruption = false
-		corruption_warned = false
-		idle_ticks = 0
-		turtle_clock = 0
-		_log("Gabriel cleanses the corruption.", "good")
-	elif best_kind == "silence":
-		best.silence_until = 0
-		_log("Gabriel cleanses silence from %s." % best.name, "good")
-	elif best_kind == "rot":
-		best.rot_until = 0
-		_log("Gabriel cleanses rot from %s." % best.name, "good")
-	elif best_kind == "mark":
-		best.mark_until = 0
-		_log("Gabriel cleanses mark from %s." % best.name, "good")
-	else:
-		best.weaken_until = 0
-		_log("Gabriel cleanses weaken from %s." % best.name, "good")
+	corruption = false
+	corruption_warned = false
+	idle_ticks = 0
+	turtle_clock = 0
+	curse_grace_until = tick + Balance.CURSE_GRACE
+	for a in _angels():
+		a.silence_until = 0
+		a.rot_until = 0
+		a.rot_stacks = 0
+		a.mark_until = 0
+		a.weaken_until = 0
+	_log("Gabriel cleanses the party.", "good")
+	debug_line("cleanse party, grace %d" % Balance.CURSE_GRACE)
 	stats.curses_cleansed += 1
 	_grant_golden(Balance.CLEANSE_BOUNTY, party_room_id)
 	return true
+
+
+func _hero_cursed(a: Dictionary) -> bool:
+	if a.is_empty():
+		return false
+	if int(a.get("silence_until", 0)) > tick:
+		return true
+	if int(a.get("rot_until", 0)) > tick or int(a.get("rot_stacks", 0)) > 0:
+		return true
+	if int(a.get("mark_until", 0)) > tick:
+		return true
+	if int(a.get("weaken_until", 0)) > tick:
+		return true
+	return false
 
 
 func _named_angel(args: Dictionary, must_live: bool) -> Dictionary:
@@ -912,31 +937,41 @@ func _cmd_spawn(args: Dictionary) -> void:
 	var node := str(args.get("node", ""))
 	var echo := bool(args.get("echo", false))
 	var paid := bool(args.get("paid", false))
-	var reason := "" if echo or paid else legal_spawn(unit, node)
+	var garrison := bool(args.get("garrison", false))
+	var reason := "" if echo or paid else legal_spawn(unit, node, garrison)
 	if reason != "":
 		return
 	if paid and map.node_tile(node).x < 0:
 		return
 	if not echo and not paid:
-		dark -= Balance.summon_cost(unit)
-		spawns_placed += 1
+		var cost := Balance.summon_cost(unit)
+		if dark >= cost:
+			dark -= cost
+			spawns_placed += 1
+		elif not garrison:
+			return
 	var pos := Fixed.tile_center(map.node_tile(node))
 	var tell := Balance.BOSS_TELL if echo else -1
+	var where := _room_title(node)
 	if unit == "swarm":
 		for i in 3:
 			var off := Vector2i((i - 1) * 450, (i - 1) * 280)
 			_make_mob("imp", "Imp", pos + off, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], node, tell)
-		_log("Imps claw their way in.", "bad")
+		_log("Imps claw their way into %s." % where, "bad")
+		debug_line("spawn swarm in %s" % where)
 	elif unit == "heavy":
 		_make_mob("heavy", "Heavy Demon", pos, Balance.HEAVY_HP, Balance.HEAVY_ATK, Balance.HEAVY_PERIOD, Balance.HEAVY_RANGE, Balance.HEAVY_SPEED, [], node, tell)
-		_log("A heavy demon rises.", "bad")
+		_log("A heavy demon rises in %s." % where, "bad")
+		debug_line("spawn heavy in %s" % where)
 	elif unit == "elite":
 		var affixes: Array = [] if echo else ["teleporter", "molten"]
 		_make_mob("elite", "Elite", pos, Balance.ELITE_HP, Balance.ELITE_ATK, Balance.ELITE_PERIOD, Balance.ELITE_RANGE, Balance.ELITE_SPEED, affixes, node, tell)
-		_log("An elite takes the node — Teleporter, Molten.", "bad")
+		_log("An elite takes the node in %s — Teleporter, Molten." % where, "bad")
+		debug_line("spawn elite in %s" % where)
 	elif unit == "imp":
 		_make_mob("imp", "Imp", pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], node, tell)
-		_log("An imp crawls out of the echo.", "bad")
+		_log("An imp crawls out in %s." % where, "bad")
+		debug_line("spawn imp in %s" % where)
 
 
 func _cmd_trap(args: Dictionary) -> void:
@@ -1044,6 +1079,7 @@ func _cmd_curse(args: Dictionary) -> void:
 	order.append(id)
 	order.sort()
 	_log("%s gathers on %s." % [kind.capitalize(), tgt.name], "bad")
+	debug_line("curse %s on %s, lands %d" % [kind, tgt.name, tick + cast])
 
 
 func _cmd_commit(args: Dictionary) -> void:
@@ -1204,6 +1240,8 @@ func _cmd_boss(button: String) -> void:
 # --- legality ---------------------------------------------------------------
 
 func legal_trap(kind: String, node: String) -> String:
+	if not traps_enabled:
+		return "off"
 	if phase != "dungeon":
 		return "echo"
 	if Balance.trap_cost(kind) > dark:
@@ -1227,23 +1265,31 @@ func legal_trap(kind: String, node: String) -> String:
 	return ""
 
 
-func legal_spawn(unit: String, node: String) -> String:
+func legal_spawn(unit: String, node: String, garrison: bool = false) -> String:
 	if phase != "dungeon":
 		return "echo"
 	if unit == "swarm" and seal_done:
 		return "sealed"
 	if not Balance.tier_ok(unit, rooms_cleared):
 		return "tier"
-	if Balance.summon_cost(unit) > dark:
-		return "dark"
 	if map.node_tile(node).x < 0:
 		return "node"
+	# A room the party is standing in still gets its opening pack when the
+	# cap is full of mobs homed somewhere else, or the bank is short.
+	if garrison:
+		return ""
+	if Balance.summon_cost(unit) > dark:
+		return "dark"
 	if mob_count() >= Balance.MOB_CAP:
 		return "cap"
 	return ""
 
 
 func legal_curse(kind: String, target_name: String) -> String:
+	if not curses_enabled:
+		return "off"
+	if tick < curse_grace_until:
+		return "grace"
 	if phase != "dungeon":
 		return "echo"
 	if Balance.curse_cost(kind) > dark:
@@ -1373,6 +1419,8 @@ func _regen() -> void:
 		d += Balance.TURTLE_DARK_PER_TICK
 	golden = mini(Balance.ELIXIR_MAX, golden + g)
 	dark = mini(Balance.ELIXIR_MAX, dark + d)
+	if infinite_elixir:
+		golden = Balance.ELIXIR_MAX
 
 
 func _movement() -> void:
@@ -1510,6 +1558,8 @@ func _maybe_repath() -> void:
 
 
 func _trigger_traps() -> void:
+	if not traps_enabled:
+		return
 	for id in order.duplicate():
 		var e: Dictionary = entities[id]
 		if str(e.kind) != "trap" or not bool(e.get("armed", false)):
@@ -1754,7 +1804,8 @@ func _zones_and_auras() -> void:
 		if not a.alive:
 			continue
 		if int(a.rot_until) > tick and tick % Balance.ROT_PERIOD == 0:
-			_hurt(a, Balance.ROT_DMG, "dot", 0, true, "Rot")
+			var stacks := maxi(1, int(a.get("rot_stacks", 1)))
+			_hurt(a, Balance.ROT_DMG * stacks, "dot", 0, true, "Rot")
 
 
 func _curses_land() -> void:
@@ -1771,6 +1822,10 @@ func _curses_land() -> void:
 		if tgt.is_empty() or not tgt.alive:
 			continue
 		var kind := str(e.subtype)
+		if tick < curse_grace_until or not curses_enabled:
+			_log("The %s fails to take hold." % kind, "good")
+			debug_line("curse %s fizzled on %s" % [kind, tgt.name])
+			continue
 		if cleanse_charges > 0:
 			cleanse_charges -= 1
 			_log("The font burns the %s off %s." % [kind, tgt.name], "good")
@@ -1779,8 +1834,15 @@ func _curses_land() -> void:
 			tgt.silence_until = tick + Balance.SILENCE_TICKS
 			_log("%s is silenced." % tgt.name, "bad")
 		elif kind == "rot":
+			var stacks := int(tgt.get("rot_stacks", 0))
+			if int(tgt.rot_until) > tick:
+				stacks = mini(Balance.ROT_STACK_CAP, maxi(stacks, 1) + 1)
+			else:
+				stacks = 1
+			tgt.rot_stacks = stacks
 			tgt.rot_until = tick + Balance.ROT_TICKS
-			_log("Rot takes %s." % tgt.name, "bad")
+			_log("Rot takes %s (%d)." % [tgt.name, stacks], "bad")
+			debug_line("rot %s stacks %d" % [tgt.name, stacks])
 		elif kind == "mark":
 			tgt.mark_until = tick + Balance.MARK_TICKS
 			_log("%s is marked." % tgt.name, "bad")
@@ -2024,6 +2086,12 @@ func _disable_room_traps(room: String) -> void:
 
 
 func _turtle() -> void:
+	if not curses_enabled or tick < curse_grace_until:
+		if tick < curse_grace_until:
+			idle_ticks = 0
+			corruption = false
+			corruption_warned = false
+		return
 	if idle_ticks == Balance.TURTLE_WARN_TICKS and not corruption_warned:
 		corruption_warned = true
 		_log("Corruption creeps. Move.", "bad")
@@ -2110,6 +2178,8 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 		return 0
 	if amount <= 0:
 		return 0
+	if god_mode and str(target.get("team", "")) == "angel":
+		return 0
 	if area and tick < iframe_until and str(target.team) == "angel":
 		_popup(target.pos, "Dodge", "good")
 		return 0
@@ -2152,12 +2222,18 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 	_note_damage_threat(target, source_id, dealt)
 	if str(target.team) == "angel":
 		stats.damage_taken += dealt
+		_add_report(str(target.get("subtype", "")), "taken", dealt)
 		_dark_from_damage(str(target.get("room", party_room_id)), dealt)
+		debug_line("hurt %s %d %s from %s" % [target.name, dealt, kind, source_name if source_name != "" else str(source_id)])
 		target.room = party_room_id
 		if not target.casting.is_empty() and str(target.casting.get("ability", "")) == "slow_revive" and dealt >= Balance.REVIVE_INTERRUPT:
 			_interrupt_revive(target)
 	else:
 		stats.damage_dealt += dealt
+		var src := _ent(source_id)
+		if not src.is_empty():
+			_add_report(str(src.get("subtype", "")), "damage", dealt)
+		debug_line("hit %s %d from %s" % [target.name, dealt, src.get("name", source_id) if not src.is_empty() else source_id])
 	# Angel damage is "bad" (red). Foe damage is "dmg" (yellow), not "good",
 	# so a hit does not read as a heal. Heals stay "good" (green).
 	var pop := str(dealt) if source_name == "" else "%s %d" % [source_name, dealt]
@@ -2207,6 +2283,10 @@ func _heal(target: Dictionary, amount: int, source_id: int = 0) -> void:
 	var gained := int(target.hp) - before
 	if gained > 0:
 		_popup(target.pos, "+%s" % gained, "good")
+		var src := _ent(source_id)
+		if not src.is_empty():
+			_add_report(str(src.get("subtype", "")), "healing", gained)
+			debug_line("heal %s +%d from %s" % [target.name, gained, src.get("name", "")])
 	# Overheal still generates threat. Passive regen never reaches this path.
 	if source_id != 0:
 		_threat_from_heal(source_id, amount)
@@ -2220,6 +2300,7 @@ func _revive(target: Dictionary, pct: int) -> bool:
 	target.pos = _clamp_pos(anchor)
 	target.silence_until = 0
 	target.rot_until = 0
+	target.rot_stacks = 0
 	target.mark_until = 0
 	target.weaken_until = 0
 	target.shield = 0
@@ -2238,6 +2319,19 @@ func _tick_downed() -> void:
 		if str(a.casting.get("ability", "")) != "slow_revive":
 			continue
 		held[int(a.casting.get("target", -1))] = true
+	for c in queue:
+		var ctype := str(c.get("type", ""))
+		var cname := str(c.get("args", {}).get("name", ""))
+		if ctype == "ability" and cname in ["slow_revive", "emergency_res"]:
+			var named := str(c.get("args", {}).get("target", ""))
+			if named == "":
+				var pending := _revive_target()
+				if not pending.is_empty():
+					held[int(pending.id)] = true
+			else:
+				var hero := _hero(named)
+				if not hero.is_empty():
+					held[int(hero.id)] = true
 	for a in _angels():
 		if a.alive or bool(a.get("final_death", false)):
 			continue
@@ -2617,6 +2711,17 @@ func build_snapshot() -> Dictionary:
 		"shrine_done": bool(shrines_done.get(party_room_id, false)),
 		"channeling_shrine": channeling_shrine,
 		"threat_boost": threat_boost_until > tick,
+		"seed": run_seed,
+		"next_spawn_in": director.next_spawn_in() if director != null else -1,
+		"curse_grace": maxi(0, curse_grace_until - tick),
+		"hero_report": hero_report.duplicate(true),
+		"god_mode": god_mode,
+		"infinite_elixir": infinite_elixir,
+		"curses_on": curses_enabled,
+		"traps_on": traps_enabled,
+		"debug_lines": debug_log.duplicate(true),
+		"debug_foes": _debug_foes(),
+		"dev": Dev.ENABLED,
 	}
 
 
@@ -2654,6 +2759,165 @@ func checksum() -> int:
 		h = Fixed.mix(h, _threat_sum(e))
 		h = Fixed.mix(h, int(e.get("swing", 0)))
 	return h
+
+
+func debug_line(text: String) -> void:
+	debug_log.append({"tick": tick, "text": text})
+	while debug_log.size() > 80:
+		debug_log.pop_front()
+
+
+func _add_report(subtype: String, field: String, amount: int) -> void:
+	if subtype == "" or amount <= 0:
+		return
+	if not hero_report.has(subtype):
+		hero_report[subtype] = {"damage": 0, "healing": 0, "threat": 0, "taken": 0}
+	hero_report[subtype][field] = int(hero_report[subtype].get(field, 0)) + amount
+
+
+func _room_title(node: String) -> String:
+	var room := node.split(":")[0]
+	var info = map.by_id.get(room, {})
+	if info.is_empty():
+		return room
+	return str(info.get("name", room))
+
+
+func _debug_foes() -> Array:
+	var rows: Array = []
+	for id in order:
+		var e: Dictionary = entities[id]
+		if not bool(e.get("alive", false)) or str(e.get("kind", "")) != "mob":
+			continue
+		var tgt := _mob_target(e)
+		rows.append({
+			"id": e.id,
+			"subtype": e.subtype,
+			"name": e.name,
+			"hp": e.hp,
+			"hp_max": e.hp_max,
+			"target": str(tgt.get("subtype", "")) if not tgt.is_empty() else "",
+			"room": str(e.get("home", e.get("room", ""))),
+			"pos": e.pos,
+		})
+	return rows
+
+
+func _cmd_debug_spawn(args: Dictionary) -> void:
+	if not Dev.ENABLED:
+		return
+	var unit := str(args.get("unit", "imp"))
+	if unit not in ["imp", "swarm", "heavy", "elite"]:
+		unit = "imp"
+	var node := "%s:center" % party_room_id
+	if map.node_tile(node).x < 0:
+		_fail("No node in this room.")
+		return
+	var pos := Fixed.tile_center(map.node_tile(node))
+	var where := _room_title(node)
+	if unit == "swarm":
+		for i in 3:
+			var off := Vector2i((i - 1) * 450, (i - 1) * 280)
+			_make_mob("imp", "Imp", pos + off, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], node, 0)
+		_log("Debug: imps in %s." % where, "bad")
+	elif unit == "heavy":
+		_make_mob("heavy", "Heavy Demon", pos, Balance.HEAVY_HP, Balance.HEAVY_ATK, Balance.HEAVY_PERIOD, Balance.HEAVY_RANGE, Balance.HEAVY_SPEED, [], node, 0)
+		_log("Debug: heavy in %s." % where, "bad")
+	elif unit == "elite":
+		_make_mob("elite", "Elite", pos, Balance.ELITE_HP, Balance.ELITE_ATK, Balance.ELITE_PERIOD, Balance.ELITE_RANGE, Balance.ELITE_SPEED, ["teleporter", "molten"], node, 0)
+		_log("Debug: elite in %s." % where, "bad")
+	else:
+		_make_mob("imp", "Imp", pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], node, 0)
+		_log("Debug: imp in %s." % where, "bad")
+	debug_line("debug spawn %s in %s" % [unit, where])
+
+
+func _cmd_debug_flag(which: String) -> void:
+	if not Dev.ENABLED:
+		return
+	if which == "god":
+		god_mode = not god_mode
+		debug_line("god %s" % god_mode)
+		_log("God mode %s." % ("on" if god_mode else "off"), "info")
+	elif which == "infinite":
+		infinite_elixir = not infinite_elixir
+		if infinite_elixir:
+			golden = Balance.ELIXIR_MAX
+		debug_line("infinite elixir %s" % infinite_elixir)
+		_log("Infinite elixir %s." % ("on" if infinite_elixir else "off"), "info")
+
+
+func _cmd_debug_heal() -> void:
+	if not Dev.ENABLED:
+		return
+	corruption = false
+	corruption_warned = false
+	idle_ticks = 0
+	turtle_clock = 0
+	for a in _angels():
+		a.alive = true
+		a.final_death = false
+		a.downed_until = 0
+		a.hp = int(a.hp_max)
+		a.silence_until = 0
+		a.rot_until = 0
+		a.rot_stacks = 0
+		a.mark_until = 0
+		a.weaken_until = 0
+		a.pos = _clamp_pos(anchor)
+	if outcome == "demon":
+		outcome = ""
+		banner = ""
+	_log("Debug: the party is restored.", "good")
+	debug_line("debug full heal")
+
+
+func _cmd_debug_dread(fill: bool) -> void:
+	if not Dev.ENABLED:
+		return
+	dark = Balance.ELIXIR_MAX if fill else 0
+	_log("Debug: Dread %s." % ("filled" if fill else "emptied"), "info")
+	debug_line("dread %d" % dark)
+
+
+func _cmd_debug_teleport(room: String) -> void:
+	if not Dev.ENABLED:
+		return
+	if not map.by_id.has(room):
+		_fail("No such room.")
+		return
+	anchor = Fixed.tile_center(map.center_tile(room))
+	path = []
+	move_goal_room = ""
+	for a in _angels():
+		if a.alive:
+			a.pos = anchor
+	_sync_room()
+	_log("Debug: the party is in %s." % _room_title(room), "info")
+	debug_line("teleport %s" % room)
+
+
+func _cmd_debug_toggle(which: String, on: bool) -> void:
+	if not Dev.ENABLED:
+		return
+	if which == "curses":
+		curses_enabled = on
+		if not on:
+			corruption = false
+			corruption_warned = false
+		_log("Debug: curses %s." % ("on" if on else "off"), "info")
+	elif which == "traps":
+		traps_enabled = on
+		_log("Debug: traps %s." % ("on" if on else "off"), "info")
+	debug_line("%s %s" % [which, "on" if on else "off"])
+
+
+func _cmd_debug_seed(next: int) -> void:
+	if not Dev.ENABLED:
+		return
+	run_seed = maxi(1, next)
+	debug_line("seed set %d" % run_seed)
+	_log("Seed is %d. Replay keeps it." % run_seed, "info")
 
 
 func debug_string() -> String:
@@ -2694,6 +2958,7 @@ func _spawn_heroes() -> void:
 			"casting": {},
 			"silence_until": 0,
 			"rot_until": 0,
+			"rot_stacks": 0,
 			"mark_until": 0,
 			"weaken_until": 0,
 			"body_block_until": 0,
@@ -3249,6 +3514,8 @@ func _update_aggro(m: Dictionary) -> void:
 		m.pulled = true
 		if not was_pulled:
 			_seed_opener_threat(m)
+			var tgt := _mob_target(m)
+			debug_line("aggro %s onto %s in %s" % [m.name, str(tgt.get("name", "")), str(m.get("home", ""))])
 
 
 func _angel_provokes(m: Dictionary) -> bool:
@@ -3355,6 +3622,9 @@ func _add_threat(mob: Dictionary, angel_id: int, amount: int) -> void:
 		mob.threat = {}
 	var key := str(angel_id)
 	mob.threat[key] = int(mob.threat.get(key, 0)) + amount
+	var angel := _ent(angel_id)
+	if not angel.is_empty():
+		_add_report(str(angel.get("subtype", "")), "threat", amount)
 
 
 func _threat_sum(e: Dictionary) -> int:
@@ -3642,7 +3912,10 @@ func _copy_unit(e: Dictionary) -> Dictionary:
 func unit_statuses(e: Dictionary) -> Array:
 	var out: Array = []
 	_push_timed(out, e, "silence", "debuff", "SIL", "silence_until", Balance.SILENCE_TICKS, true)
-	_push_timed(out, e, "rot", "debuff", "ROT", "rot_until", Balance.ROT_TICKS, true)
+	var rot_until := int(e.get("rot_until", 0))
+	if rot_until > tick:
+		var stacks := maxi(1, int(e.get("rot_stacks", 1)))
+		out.append(_status_row("rot", "debuff", "ROT", stacks, rot_until - tick, Balance.ROT_TICKS, true))
 	_push_timed(out, e, "mark", "debuff", "MRK", "mark_until", Balance.MARK_TICKS, true)
 	_push_timed(out, e, "weaken", "debuff", "WEK", "weaken_until", Balance.WEAKEN_TICKS, true)
 	if str(e.get("kind", "")) == "angel" and bool(e.get("alive", false)) and corruption:

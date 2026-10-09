@@ -58,10 +58,12 @@ const KILL_ELITE := 800
 const TRAP_DARK := 650
 const DARK_PER_HP := 2
 
-const TURTLE_WARN_TICKS := 240
-const TURTLE_TICKS := 360
+# v1.1.3: camping a cleared fork used to corrupt in 12s and kill in ~25s
+# with no fight on screen. Warn at 30s, bite at 50s, and tick for 1.
+const TURTLE_WARN_TICKS := 600
+const TURTLE_TICKS := 1000
 const TURTLE_DMG_PERIOD := 10
-const TURTLE_DMG := 2
+const TURTLE_DMG := 1
 const TURTLE_DARK_PER_TICK := 22
 
 const ROUTE_LOCK_TICKS := 60
@@ -92,6 +94,10 @@ const ECHO_TRAP_CAP_TRAPPY := 3
 const HISTORY_FLOOR := 4
 # A committed elite or trap cluster is readable for 3 seconds before it arms.
 const COMMIT_CAST := 60
+# First garrison of a room the party just entered. 2 seconds at 20 Hz.
+const ROOM_SPAWN_DELAY := 40
+# After Cleanse, curses (including Corruption) cannot land for 8 seconds.
+const CURSE_GRACE := 160
 # March ceilings by stage. Overflow above the line is spent, so a long
 # corridor cannot sit on the cap and mint the same finale every time.
 const MARCH_BANK: Array[int] = [8800, 7600, 6400, 4800]
@@ -116,14 +122,15 @@ const LEASH_RANGE := 9800
 # burst, or a long run of heals that include overheal, can still pass him.
 # Heals add this percent of the amount cast (not just the health gained),
 # split across mobs already in the fight. v1.1.2 cut heal threat from 100%
-# to 35% so a couple of party heals no longer yank the pack.
+# to 35%. v1.1.3 raised the party heal to 110 and cut the percent to 10 so
+# the threat added by one party heal stays 11.
 # Worked example, one mob, Gabriel's aura included (112%):
 #   Michael auto: dealt 8 → threat 8 * 1600/100 = 128
-#   Party heal: 32 * 35/100 = 11 threat. Twelve heals pass one auto.
+#   Party heal: 110 * 10/100 = 11 threat. Twelve heals pass one auto.
 #   Azrael strike: dealt 120 → threat 120, still under one tank auto.
 #   Fresh pull also grants OPENER_THREAT (below) before anyone swings.
 const TANK_THREAT_MULT := 1600
-const HEAL_THREAT_PCT := 35
+const HEAL_THREAT_PCT := 10
 # Written onto Michael the moment a mob is pulled, before the first swing,
 # so the pack opens on the tank even if a backliner is standing closer.
 # 480 is about four Azrael strikes (120 each) or forty-three party heals
@@ -139,8 +146,10 @@ const SHIELD_WALL_TICKS := 60
 const BODY_BLOCK_TICKS := 80
 # Michael keeps this percent of incoming damage. Highest HP is on the hero row.
 const MICHAEL_MITIGATION := 75
-const HEAL_SINGLE := 62
-const HEAL_PARTY := 32
+# v1.1.3: elixir was never the limit. A party heal of 32 could not keep a
+# cursed party up, and a single heal halved by Rot landed around 31.
+const HEAL_SINGLE := 140
+const HEAL_PARTY := 110
 const REVIVE_CHANNEL := 60
 const REVIVE_PCT := 40
 const REVIVE_INTERRUPT := 14
@@ -182,7 +191,9 @@ const SCATTER_SHOVE := 1400
 const SILENCE_TICKS := 80
 const ROT_TICKS := 100
 const ROT_PERIOD := 10
-const ROT_DMG := 5
+# One stack is 6 dps (was 10). Reapply adds a stack, capped, instead of refreshing a flat 10.
+const ROT_DMG := 3
+const ROT_STACK_CAP := 3
 const MARK_TICKS := 120
 const MARK_AMP := 150
 
@@ -200,9 +211,10 @@ const ALTAR_NEED := 400
 const SHRINE_CHANNEL := 40
 const SHRINE_RANGE := 1600
 const ALTAR_REVIVE_DELAY := 20
-# Lethal damage downs an angel for 3 seconds. Revive rites can still reach
-# them; when the window closes the death is final.
-const DOWNED_TICKS := 60
+# Lethal damage downs an angel for 10 seconds. Revive rites can still reach
+# them; when the window closes the death is final. A revive already queued
+# holds the window open until that command resolves.
+const DOWNED_TICKS := 200
 
 # Mob bodies. 1.0.2 values, for the balance note:
 #   imp 34 HP / atk 6 / period 18, heavy 260 / 13 / 18, elite 420 / 12 / 20.

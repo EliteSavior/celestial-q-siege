@@ -149,6 +149,7 @@ func title() -> void:
 func _reset_run(to_title: bool) -> void:
 	sim.reset()
 	acc = 0.0
+	speed = 1.0
 	paused = false
 	briefing = to_title
 	if board:
