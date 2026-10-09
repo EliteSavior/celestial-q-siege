@@ -205,7 +205,10 @@ const PHALANX_ABSORB := 28
 const SCATTER_TICKS := 70
 const SCATTER_IFRAME := 12
 const SCATTER_SHOVE := 1400
-const SILENCE_TICKS := 80
+# Long enough that one cast still covers the healer when Cleanse is never
+# pressed. Gabriel clears it on the next cast, so a party that cleanses
+# only eats the telegraph.
+const SILENCE_TICKS := 420
 const ROT_TICKS := 100
 const ROT_PERIOD := 10
 # One stack is 6 dps (was 10). Reapply adds a stack, capped, instead of refreshing a flat 10.

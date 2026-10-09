@@ -293,7 +293,15 @@ func refresh(snap: Dictionary) -> void:
 		else:
 			var kind := str(snap.get("next_spawn_kind", ""))
 			var why := str(snap.get("next_spawn_why", ""))
-			var label := {"pack": "Pack", "trap": "Traps", "curse": "Curse"}.get(kind, kind.capitalize() if kind != "" else "Threat")
+			var label := "Threat"
+			if kind == "pack":
+				label = "Pack"
+			elif kind == "trap":
+				label = "Traps"
+			elif kind == "curse":
+				label = "Curse"
+			elif kind != "":
+				label = kind.capitalize()
 			_spawn_l.text = "%s in %0.1fs — %s" % [label, float(spawn_in) / 20.0, why]
 	if _cue:
 		_cue.text = _cue_line(snap)
@@ -549,7 +557,7 @@ func _place_meters(w: float) -> void:
 func _layout_wide(w: float, h: float) -> void:
 	_place_meters(w)
 	var stance_y := h - 80.0
-	var skill_y := h - 164.0
+	var skill_y := h - 152.0
 	var tab_y := h - 236.0
 	var coach_y := tab_y - 64.0
 	var log_y := coach_y - 96.0
@@ -579,7 +587,7 @@ func _layout_wide(w: float, h: float) -> void:
 func _layout_narrow(w: float, h: float) -> void:
 	_place_meters(w)
 	var stance_y := h - 80.0
-	var skill_y := h - 164.0
+	var skill_y := h - 152.0
 	var tab_y := h - 236.0
 	var coach_y := tab_y - 64.0
 	var log_y := coach_y - 96.0

@@ -114,9 +114,7 @@ func _run_opening() -> bool:
 	if sim.max_depth >= 1 and not still_home:
 		opening_abandoned = true
 		return false
-	if not sim.can_read("trapped"):
-		return false
-	# Far nodes, so the party can read Still air before they step on it.
+	# Commit from the antechamber. The cast is the read; the traps sit on the far nodes.
 	var pieces: Array = [
 		{"kind": "spike", "node": "trapped:flank", "curse": "rot"},
 		{"kind": "snare", "node": "trapped:rear"},
@@ -217,6 +215,12 @@ func _opt_finish(options: Array) -> void:
 
 func _opt_break(options: Array) -> void:
 	var grace := int(sim.curse_grace_until) - int(sim.tick)
+	if grace <= 0 and sim.mob_near("raphael"):
+		var healer := sim._hero("raphael")
+		# Start the next cast before the current one falls off. The cast itself
+		# is 50 ticks, and Dark regen is what spaces the buys.
+		if not healer.is_empty() and healer.alive and int(healer.get("silence_until", 0)) <= sim.tick + 90:
+			options.append(_curse_opt("silence", "raphael", 240, "break heals"))
 	if grace > 0 and grace <= 80:
 		var cloth := _cloth_target()
 		if sim.mob_near(cloth):
@@ -402,7 +406,7 @@ func _curse_opt(kind: String, who: String, score: int, why: String) -> Dictionar
 
 
 func _pick(options: Array) -> Dictionary:
-	var best := -1 << 30
+	var best := -(1 << 30)
 	var tied: Array = []
 	for raw in options:
 		var opt: Dictionary = raw
