@@ -44,6 +44,12 @@ func on_tick() -> void:
 	next_decision = sim.tick + _gap()
 	if _survive():
 		return
+	# Hold other purchases until this room's garrison exists. Spending
+	# the decision on the Gate Seal used to log a swarm the fog hides.
+	var here := str(sim.party_room())
+	if committed.has(here) and not resolved.has(here):
+		last_priority = "protect"
+		return
 	if _fire_committed():
 		last_priority = "protect"
 		return
@@ -515,10 +521,19 @@ func _try_trap(reserved: int, used_nodes: Dictionary) -> int:
 	return cost
 
 
-## The antechamber, the first corridor, and the fork are not a fight yet.
-## Curses there were the unexplained opening damage tick.
+## The antechamber, the fork, and the halls that lead into the first
+## branch are not a fight yet. The east door is depth 1, so max_depth
+## alone used to end the lobby in that hall and drop a swarm on the
+## Gate Seal — logged, fogged, and invisible.
 func _lobby() -> bool:
-	return sim.max_depth < 1 and sim.phase != "lucifer"
+	if sim.phase == "lucifer":
+		return false
+	if sim.stage_reached > 0 or sim.rooms_cleared > 0 or sim.seal_done:
+		return false
+	var kind := _kind(str(sim.party_room()))
+	if kind in ["summoned", "cursed", "trapped", "gallery"]:
+		return false
+	return true
 
 
 func _try_curse(reserved: int) -> int:

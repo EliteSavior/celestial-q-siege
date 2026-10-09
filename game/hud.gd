@@ -876,6 +876,15 @@ func _on_debug_cmd(type: String, args: Dictionary) -> void:
 	game.command(type, args)
 
 
+func _threat_by_hero(snap: Dictionary) -> Dictionary:
+	var out := {}
+	var meter: Dictionary = snap.get("threat", {})
+	for row in meter.get("rows", []):
+		if typeof(row) == TYPE_DICTIONARY:
+			out[str(row.get("subtype", ""))] = int(row.get("threat", 0))
+	return out
+
+
 func _on_debug_log() -> void:
 	_log_open = not _log_open
 	if _debug_log_panel:
@@ -893,6 +902,7 @@ func _refresh_debug(snap: Dictionary) -> void:
 	if not Dev.ENABLED:
 		return
 	var lines: Array = snap.get("debug_lines", [])
+	var threat_of := _threat_by_hero(snap)
 	var file := FileAccess.open("user://debug_log.txt", FileAccess.WRITE)
 	if file:
 		file.store_line("tick %s speed %s seed %s" % [snap.get("tick", 0), game.speed if game else 1, snap.get("seed", 1)])
@@ -903,24 +913,30 @@ func _refresh_debug(snap: Dictionary) -> void:
 		var heroes: Dictionary = snap.get("heroes", {})
 		for subtype in heroes.keys():
 			var hs: Dictionary = heroes[subtype]
-			file.store_line("hero %s hp %s/%s downed %s final %s silence %s rot %s mark %s weaken %s" % [
-				subtype, hs.get("hp", 0), hs.get("hp_max", 0), hs.get("downed", false), hs.get("final_death", false),
+			file.store_line("hero %s hp %s/%s threat %s downed %s final %s silence %s rot %s mark %s weaken %s" % [
+				subtype, hs.get("hp", 0), hs.get("hp_max", 0), int(threat_of.get(str(subtype), 0)),
+				hs.get("downed", false), hs.get("final_death", false),
 				hs.get("silence", false), hs.get("rot", false), hs.get("mark", false), hs.get("weaken", false),
 			])
 		for foe in snap.get("debug_foes", []):
-			file.store_line("foe %s hp %s/%s target %s room %s" % [foe.get("subtype", ""), foe.get("hp", 0), foe.get("hp_max", 0), foe.get("target", ""), foe.get("room", "")])
+			file.store_line("foe %s %s hp %s/%s target %s room %s" % [foe.get("subtype", ""), foe.get("name", ""), foe.get("hp", 0), foe.get("hp_max", 0), foe.get("target", ""), foe.get("room", "")])
 		for row in lines:
 			file.store_line("%s %s" % [row.get("tick", 0), row.get("text", "")])
 	if _debug_log == null or not _log_open:
 		return
+	var meter: Dictionary = snap.get("threat", {})
 	var body := "tick %s  speed %s  seed %s\n" % [snap.get("tick", 0), game.speed if game else 1, snap.get("seed", 1)]
-	body += "Golden %s  Dread %s  god %s  elixir %s\n" % [snap.get("golden", 0), snap.get("dark", 0), snap.get("god_mode", false), snap.get("infinite_elixir", false)]
-	body += "threat %s\n" % str(snap.get("threat", {}))
+	body += "Golden %s (+%s)  Dread %s (+%s)  god %s  elixir %s\n" % [
+		snap.get("golden", 0), snap.get("golden_regen", 0), snap.get("dark", 0), snap.get("dark_regen", 0),
+		snap.get("god_mode", false), snap.get("infinite_elixir", false),
+	]
+	body += "aggro %s  reason %s\n" % [meter.get("holder", ""), meter.get("reason", "")]
 	var heroes2: Dictionary = snap.get("heroes", {})
 	for subtype2 in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
 		var hs2: Dictionary = heroes2.get(subtype2, {})
-		body += "%s hp %s/%s sil %s rot %s mark %s weak %s\n" % [
-			subtype2, hs2.get("hp", 0), hs2.get("hp_max", 0), hs2.get("silence", false), hs2.get("rot", false), hs2.get("mark", false), hs2.get("weaken", false),
+		body += "%s hp %s/%s threat %s sil %s rot %s mark %s weak %s\n" % [
+			subtype2, hs2.get("hp", 0), hs2.get("hp_max", 0), int(threat_of.get(subtype2, 0)),
+			hs2.get("silence", false), hs2.get("rot", false), hs2.get("mark", false), hs2.get("weaken", false),
 		]
 	for foe2 in snap.get("debug_foes", []):
 		body += "foe %s %s/%s -> %s @ %s\n" % [foe2.get("name", ""), foe2.get("hp", 0), foe2.get("hp_max", 0), foe2.get("target", ""), foe2.get("room", "")]

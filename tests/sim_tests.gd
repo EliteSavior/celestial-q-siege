@@ -1762,7 +1762,7 @@ func test_raphael_kit() -> void:
 		fail("single heal splashed")
 	_pay_blocked(heals, "single_heal")
 	for a in heals._angels():
-		a.hp = int(a.hp_max) - 50
+		a.hp = 1
 	var before := {}
 	for a2 in heals._angels():
 		before[a2.subtype] = int(a2.hp)
@@ -2822,7 +2822,7 @@ func test_win_lose_restart_loop() -> void:
 		return
 	for angel in game.sim._angels():
 		game.sim._hurt(angel, 99999, "single", 0, false)
-	for _i in 80:
+	for _i in Balance.DOWNED_TICKS + 5:
 		if game.sim.outcome != "":
 			break
 		game.sim.tick_once()
@@ -4899,8 +4899,13 @@ func test_portrait_tap_does_not_swap_the_bar() -> void:
 		main.queue_free()
 		return
 	for cmd in hud._bar.keys():
-		if not bool(hud._bar[cmd].visible):
-			fail("%s was hidden by a portrait tap" % cmd)
+		if bool(hud._bar[cmd].visible):
+			fail("duplicate row showed %s after a portrait tap" % cmd)
+			main.queue_free()
+			return
+	for act_name in ["shield", "mend", "revive", "beam"]:
+		if not bool(hud._acts[act_name].visible):
+			fail("%s was hidden by a portrait tap" % act_name)
 			main.queue_free()
 			return
 	var az: Dictionary = game.sim._hero("azrael")
@@ -5309,6 +5314,9 @@ func test_first_room_spawns_within_a_few_seconds() -> void:
 		if sim.party_room() == "summoned":
 			entered = sim.tick
 			break
+		if sim.mob_count() != 0:
+			fail("mobs spawned in %s before the first room %s" % [sim.party_room(), sim.debug_string()])
+			return
 	if entered < 0:
 		fail("never entered the first room %s" % sim.debug_string())
 		return
@@ -5365,12 +5373,12 @@ func test_cleanse_clears_party_and_blocks_reapply() -> void:
 
 func test_revive_inside_window_and_while_paused() -> void:
 	var sim := _lab()
-	var gabriel := sim._hero("gabriel")
-	sim._hurt(gabriel, 99999, "single", 0, false)
+	var michael := sim._hero("michael")
+	sim._hurt(michael, 99999, "single", 0, false)
 	sim.golden = 9000
-	sim.submit("ability", {"name": "emergency_res", "target": "gabriel"})
+	sim.submit("ability", {"name": "emergency_res", "target": "michael"})
 	sim.tick_once()
-	if not gabriel.alive or bool(gabriel.final_death):
+	if not michael.alive or bool(michael.final_death):
 		fail("revive inside the window missed %s" % _feed(sim))
 		return
 	if host == null:
@@ -5390,7 +5398,7 @@ func test_revive_inside_window_and_while_paused() -> void:
 	game.hud._acts.revive.pressed.emit()
 	game.hud._on_portrait("gabriel")
 	gab.downed_until = game.sim.tick + 1
-	var frozen := game.sim.tick
+	var frozen: int = int(game.sim.tick)
 	game._process(3.0)
 	if game.sim.tick != frozen:
 		fail("paused sim advanced to %d" % game.sim.tick)
