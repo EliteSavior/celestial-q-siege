@@ -155,6 +155,9 @@ static func _symbol(canvas: CanvasItem, id: String, rect: Rect2, ink: Color) -> 
 		"safe":
 			_ring(canvas, c, r, 0, TAU, Color(0.7, 0.95, 0.82), 1.6)
 			_seg(canvas, c + Vector2(-r * 0.45, 0), c + Vector2(r * 0.45, 0), Color(0.7, 0.95, 0.82), 1.6)
+		"dodge":
+			_ring(canvas, c, r, 0.6, 5.2, Color(0.75, 0.95, 1.0), 1.8)
+			_seg(canvas, c + Vector2(-r * 0.2, r * 0.4), c + Vector2(r * 0.55, -r * 0.45), Color(0.75, 0.95, 1.0), 1.8)
 		_:
 			_dot(canvas, c, r * 0.45, ink)
 

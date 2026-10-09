@@ -3,7 +3,8 @@ extends RefCounted
 ## Authoritative combat simulation.
 ##
 ## Angels and the demon (the director now, a human later) submit the same
-## commands. tick_once() is an integer step: no frame delta and no RNG.
+## commands. tick_once() is an integer step: no frame delta. Dodge, crit,
+## and the director draw a seeded xorshift, so one seed replays bit-for-bit.
 ## The renderer may only trust build_snapshot(). Fair play is assumed.
 
 const STANCE_TIGHT := 0
@@ -107,6 +108,7 @@ var corruption_warned := false
 var turtle_clock := 0
 var curse_grace_until := 0
 var run_seed := 1
+var rng_state := 1
 var god_mode := false
 var infinite_elixir := false
 var curses_enabled := true
@@ -221,6 +223,7 @@ func reset() -> void:
 	corruption_warned = false
 	turtle_clock = 0
 	curse_grace_until = 0
+	_reseed()
 	god_mode = false
 	infinite_elixir = false
 	curses_enabled = true
@@ -641,9 +644,10 @@ func _apply_ability(ability: String, owner: Dictionary, args: Dictionary = {}) -
 			_log("Azrael disarms a trap.", "good")
 			return true
 		"escape_dash":
-			owner.untargetable_until = tick + Balance.DASH_TICKS
-			owner.pos = _dash_landing(owner.pos)
-			_log("Azrael slips the line.", "good")
+			owner.dodge_until = tick + Balance.DASH_DODGE_TICKS
+			owner.dodge_bonus = Balance.DASH_DODGE
+			_log("Azrael's Dodge surges.", "good")
+			debug_line("dash dodge %d for %d" % [Balance.DASH_DODGE, Balance.DASH_DODGE_TICKS])
 			return true
 		"detect_pulse":
 			var n := _reveal_radius(owner.pos, Balance.DETECT_PULSE)
@@ -1009,6 +1013,7 @@ func _cmd_trap(args: Dictionary) -> void:
 		"room": node.split(":")[0],
 		"avoided": false,
 		"radius": Balance.HELLFLAME_RADIUS if kind == "hellflame" else 0,
+		"curse": str(args.get("curse", "")),
 	}
 	order.append(id)
 	order.sort()
@@ -1113,7 +1118,7 @@ func _cmd_commit(args: Dictionary) -> void:
 	var id := _alloc()
 	var stored: Array = []
 	for p2 in pieces:
-		stored.append({"kind": str(p2.get("kind", "")), "node": str(p2.get("node", ""))})
+		stored.append({"kind": str(p2.get("kind", "")), "node": str(p2.get("node", "")), "curse": str(p2.get("curse", ""))})
 	entities[id] = {
 		"id": id,
 		"team": "demon",
@@ -1626,6 +1631,7 @@ func _spring_trap(e: Dictionary) -> void:
 	elif kind == "hellflame":
 		_add_zone(e.pos, Balance.HELLFLAME_RADIUS, 60, 8, "hell", 0)
 		_log("Hellflame erupts.", "bad")
+	_trap_curse(e)
 
 
 func _mob_ai() -> void:
@@ -1830,25 +1836,12 @@ func _curses_land() -> void:
 			cleanse_charges -= 1
 			_log("The font burns the %s off %s." % [kind, tgt.name], "good")
 			continue
-		if kind == "silence":
-			tgt.silence_until = tick + Balance.SILENCE_TICKS
-			_log("%s is silenced." % tgt.name, "bad")
-		elif kind == "rot":
-			var stacks := int(tgt.get("rot_stacks", 0))
-			if int(tgt.rot_until) > tick:
-				stacks = mini(Balance.ROT_STACK_CAP, maxi(stacks, 1) + 1)
-			else:
-				stacks = 1
-			tgt.rot_stacks = stacks
-			tgt.rot_until = tick + Balance.ROT_TICKS
-			_log("Rot takes %s (%d)." % [tgt.name, stacks], "bad")
-			debug_line("rot %s stacks %d" % [tgt.name, stacks])
-		elif kind == "mark":
-			tgt.mark_until = tick + Balance.MARK_TICKS
-			_log("%s is marked." % tgt.name, "bad")
-		elif kind == "weaken":
-			tgt.weaken_until = tick + Balance.WEAKEN_TICKS
-			_log("%s is weakened." % tgt.name, "bad")
+		var via_trap := bool(e.get("via_trap", false))
+		if not via_trap and not mob_near(str(tgt.subtype)):
+			_log("The %s finds no one close enough to cast it." % kind, "good")
+			debug_line("curse %s fizzled, no vehicle on %s" % [kind, tgt.name])
+			continue
+		_apply_curse_now(tgt, kind)
 
 
 func _lucifer() -> void:
@@ -2100,11 +2093,9 @@ func _turtle() -> void:
 	if not corruption:
 		corruption = true
 		_log("The cleared room turns on you. Dark swells.", "bad")
+	# Idle Corruption is a warning, not a hit. The dungeon never damages
+	# the party by itself — only mobs and traps do.
 	turtle_clock += 1
-	if turtle_clock % Balance.TURTLE_DMG_PERIOD == 0:
-		for a in _angels():
-			if a.alive:
-				_hurt(a, Balance.TURTLE_DMG, "dot", 0, true, "Corruption")
 
 
 func _resolve_revives() -> void:
@@ -2181,7 +2172,9 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 	if god_mode and str(target.get("team", "")) == "angel":
 		return 0
 	if area and tick < iframe_until and str(target.team) == "angel":
-		_popup(target.pos, "Dodge", "good")
+		_popup(target.pos, "Dodge", "good", int(target.id), "Dodge")
+		return 0
+	if str(target.team) == "angel" and _try_dodge(target):
 		return 0
 	if str(target.team) == "angel" and kind == "single" and not area:
 		var michael := _hero("michael")
@@ -2198,12 +2191,8 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 			var michael2 := _hero("michael")
 			if michael2.alive and Fixed.dist(target.pos, michael2.pos) > 1400:
 				amount = amount * 120 / 100
-		if tick < shield_wall_until:
-			amount = amount * 50 / 100
-		if int(target.mark_until) > tick:
-			amount = amount * Balance.MARK_AMP / 100
-		if str(target.subtype) == "michael":
-			amount = amount * Balance.MICHAEL_MITIGATION / 100
+		var kept := 100 - _armor_of(target)
+		amount = amount * kept / 100
 		if amount < 1:
 			amount = 1
 		if tick < phalanx_until and int(target.phalanx) > 0:
@@ -2237,7 +2226,7 @@ func _hurt(target: Dictionary, amount: int, kind: String, source_id: int, area: 
 	# Angel damage is "bad" (red). Foe damage is "dmg" (yellow), not "good",
 	# so a hit does not read as a heal. Heals stay "good" (green).
 	var pop := str(dealt) if source_name == "" else "%s %d" % [source_name, dealt]
-	_popup(target.pos, pop, "bad" if str(target.team) == "angel" else "dmg")
+	_popup(target.pos, pop, "bad" if str(target.team) == "angel" else "dmg", int(target.id), source_name)
 	if int(target.hp) <= 0:
 		_die(target)
 	return dealt
@@ -2274,6 +2263,10 @@ func _die(target: Dictionary) -> void:
 func _heal(target: Dictionary, amount: int, source_id: int = 0) -> void:
 	if not target.alive:
 		return
+	if source_id != 0:
+		var caster := _ent(source_id)
+		if not caster.is_empty() and str(caster.get("team", "")) == "angel":
+			amount = amount * _power_of(caster) / 100
 	if int(target.rot_until) > tick:
 		amount = amount * 50 / 100
 	if amount < 1:
@@ -2480,6 +2473,7 @@ func _commitments_land() -> void:
 					"kind": str(p.get("kind", "")),
 					"node": str(p.get("node", "")),
 					"paid": true,
+					"curse": str(p.get("curse", "")),
 				})
 
 
@@ -2713,6 +2707,10 @@ func build_snapshot() -> Dictionary:
 		"threat_boost": threat_boost_until > tick,
 		"seed": run_seed,
 		"next_spawn_in": director.next_spawn_in() if director != null else -1,
+		"next_spawn_kind": director.pending_kind if director != null else "",
+		"next_spawn_why": director.pending_why if director != null else "",
+		"variance_penalty": director.last_penalty if director != null else 0,
+		"sheets": _sheets(),
 		"curse_grace": maxi(0, curse_grace_until - tick),
 		"hero_report": hero_report.duplicate(true),
 		"god_mode": god_mode,
@@ -2728,6 +2726,7 @@ func build_snapshot() -> Dictionary:
 func checksum() -> int:
 	var h := 2166136261
 	h = Fixed.mix(h, tick)
+	h = Fixed.mix(h, rng_state)
 	h = Fixed.mix(h, golden)
 	h = Fixed.mix(h, dark)
 	h = Fixed.mix(h, stage_reached)
@@ -2916,6 +2915,7 @@ func _cmd_debug_seed(next: int) -> void:
 	if not Dev.ENABLED:
 		return
 	run_seed = maxi(1, next)
+	_reseed()
 	debug_line("seed set %d" % run_seed)
 	_log("Seed is %d. Replay keeps it." % run_seed, "info")
 
@@ -3200,6 +3200,194 @@ func _lead_angel() -> Dictionary:
 	return best
 
 
+func _reseed() -> void:
+	rng_state = run_seed & 0x7FFFFFFF
+	if rng_state == 0:
+		rng_state = 1
+
+
+func rand_below(n: int) -> int:
+	if n <= 1:
+		return 0
+	var x := rng_state & 0x7FFFFFFF
+	if x == 0:
+		x = 1
+	x = x ^ ((x << 13) & 0x7FFFFFFF)
+	x = x ^ ((x >> 17) & 0x7FFFFFFF)
+	x = x ^ ((x << 5) & 0x7FFFFFFF)
+	x = x & 0x7FFFFFFF
+	if x == 0:
+		x = 1
+	rng_state = x
+	return x % n
+
+
+func _armor_of(a: Dictionary) -> int:
+	if a.is_empty() or str(a.get("team", "")) != "angel":
+		return 0
+	var armor := Balance.ARMOR_MICHAEL if str(a.get("subtype", "")) == "michael" else 0
+	if tick < shield_wall_until:
+		armor += Balance.SHIELD_WALL_ARMOR
+	if int(a.get("mark_until", 0)) > tick:
+		armor -= Balance.MARK_ARMOR
+	return clampi(armor, -150, Balance.ARMOR_CAP)
+
+
+func _dodge_of(a: Dictionary) -> int:
+	if a.is_empty():
+		return 0
+	var chance := Balance.DODGE_BASE + int(a.get("dodge_extra", 0))
+	if int(a.get("dodge_until", 0)) > tick:
+		chance += int(a.get("dodge_bonus", 0))
+	return clampi(chance, 0, 95)
+
+
+func _power_of(a: Dictionary) -> int:
+	if a.is_empty():
+		return Balance.POWER_BASE
+	var power := Balance.POWER_BASE + int(a.get("power_extra", 0))
+	if int(a.get("weaken_until", 0)) > tick:
+		power = power * Balance.WEAKEN_DEALT / 100
+	return maxi(power, 1)
+
+
+func _crit_of(a: Dictionary) -> int:
+	if a.is_empty():
+		return 0
+	return clampi(Balance.CRIT_BASE + int(a.get("crit_bonus", 0)), 0, 100)
+
+
+func _threat_of(a: Dictionary) -> int:
+	if a.is_empty() or str(a.get("team", "")) != "angel":
+		return Balance.THREAT_BASE
+	var threat := Balance.THREAT_MICHAEL if str(a.get("subtype", "")) == "michael" else Balance.THREAT_BASE
+	threat += int(a.get("threat_extra", 0))
+	if str(a.get("subtype", "")) == "michael" and tick < threat_boost_until:
+		threat = threat * (100 + Balance.TAUNT_BOOST_PCT) / 100
+	return maxi(threat, 1)
+
+
+func _try_dodge(a: Dictionary) -> bool:
+	var chance := _dodge_of(a)
+	if chance <= 0:
+		return false
+	if rand_below(100) >= chance:
+		return false
+	_popup(a.pos, "Dodge", "good", int(a.id), "Dodge")
+	debug_line("dodge %s (%d%%)" % [a.get("name", ""), chance])
+	return true
+
+
+func _try_crit(a: Dictionary) -> bool:
+	var chance := _crit_of(a)
+	if chance <= 0:
+		return false
+	return rand_below(100) < chance
+
+
+func mob_near(subtype: String) -> bool:
+	var hero := _hero(subtype)
+	if hero.is_empty() or not bool(hero.get("alive", false)):
+		return false
+	var room := map.id_at_tile(Fixed.tile_of(hero.pos))
+	for m in _living_mobs():
+		if str(m.get("kind", "")) != "mob":
+			continue
+		if Fixed.dist(m.pos, hero.pos) <= Balance.CURSE_NEAR:
+			return true
+		var mroom := map.id_at_tile(Fixed.tile_of(m.pos))
+		if room != "" and mroom == room and not _room_corridor(room):
+			return true
+	return false
+
+
+func hero_sheet(subtype: String) -> Dictionary:
+	var a := _hero(subtype)
+	if a.is_empty():
+		return {}
+	var mods: Array = []
+	var armor_base := Balance.ARMOR_MICHAEL if subtype == "michael" else 0
+	var threat_base := Balance.THREAT_MICHAEL if subtype == "michael" else Balance.THREAT_BASE
+	if tick < shield_wall_until:
+		mods.append("Shield wall +%d Armor" % Balance.SHIELD_WALL_ARMOR)
+	if int(a.get("mark_until", 0)) > tick:
+		mods.append("Mark -%d Armor" % Balance.MARK_ARMOR)
+	if int(a.get("dodge_until", 0)) > tick:
+		mods.append("Dash +%d Dodge" % int(a.get("dodge_bonus", 0)))
+	if int(a.get("weaken_until", 0)) > tick:
+		mods.append("Weaken Power %d" % _power_of(a))
+	if subtype == "michael" and tick < threat_boost_until:
+		mods.append("Taunt boost Threat")
+	return {
+		"health": int(a.hp),
+		"health_max": int(a.hp_max),
+		"armor": _armor_of(a),
+		"armor_base": armor_base,
+		"dodge": _dodge_of(a),
+		"dodge_base": Balance.DODGE_BASE,
+		"power": _power_of(a),
+		"power_base": Balance.POWER_BASE,
+		"crit": _crit_of(a),
+		"crit_base": Balance.CRIT_BASE,
+		"threat": _threat_of(a),
+		"threat_base": threat_base,
+		"mods": mods,
+	}
+
+
+func _sheets() -> Dictionary:
+	var out := {}
+	for spec in _HERO:
+		var subtype := str(spec.subtype)
+		out[subtype] = hero_sheet(subtype)
+	return out
+
+
+func _apply_curse_now(tgt: Dictionary, kind: String) -> void:
+	if tgt.is_empty() or not bool(tgt.get("alive", false)):
+		return
+	if kind == "silence":
+		tgt.silence_until = tick + Balance.SILENCE_TICKS
+		_log("%s is silenced." % tgt.name, "bad")
+	elif kind == "rot":
+		var stacks := int(tgt.get("rot_stacks", 0))
+		if int(tgt.rot_until) > tick:
+			stacks = mini(Balance.ROT_STACK_CAP, maxi(stacks, 1) + 1)
+		else:
+			stacks = 1
+		tgt.rot_stacks = stacks
+		tgt.rot_until = tick + Balance.ROT_TICKS
+		_log("Rot takes %s (%d)." % [tgt.name, stacks], "bad")
+		debug_line("rot %s stacks %d" % [tgt.name, stacks])
+	elif kind == "mark":
+		tgt.mark_until = tick + Balance.MARK_TICKS
+		_log("%s is marked." % tgt.name, "bad")
+	elif kind == "weaken":
+		tgt.weaken_until = tick + Balance.WEAKEN_TICKS
+		_log("%s is weakened." % tgt.name, "bad")
+
+
+func _trap_curse(trap: Dictionary) -> void:
+	var kind := str(trap.get("curse", ""))
+	if kind == "":
+		return
+	if tick < curse_grace_until or not curses_enabled:
+		_log("The trapped %s fails to take hold." % kind, "good")
+		return
+	for a in _angels():
+		if not a.alive:
+			continue
+		if Fixed.dist(a.pos, trap.pos) > Balance.CURSE_NEAR and map.id_at_tile(Fixed.tile_of(a.pos)) != str(trap.get("room", "")):
+			continue
+		if cleanse_charges > 0:
+			cleanse_charges -= 1
+			_log("The font burns the trapped %s off %s." % [kind, a.name], "good")
+			return
+		_apply_curse_now(a, kind)
+		debug_line("trap curse %s on %s" % [kind, a.name])
+		return
+
+
 func _out_damage(base: int, source_id: int = 0) -> int:
 	var amount := base
 	var g := _hero("gabriel")
@@ -3207,8 +3395,10 @@ func _out_damage(base: int, source_id: int = 0) -> int:
 		amount = amount * Balance.GABRIEL_AURA / 100
 	if source_id != 0:
 		var src := _ent(source_id)
-		if not src.is_empty() and int(src.get("weaken_until", 0)) > tick:
-			amount = amount * Balance.WEAKEN_DEALT / 100
+		if not src.is_empty() and str(src.get("team", "")) == "angel":
+			amount = amount * _power_of(src) / 100
+			if _try_crit(src):
+				amount = amount * Balance.CRIT_MULT / 100
 	if amount < 1 and base > 0:
 		return 1
 	return amount
@@ -3573,11 +3763,7 @@ func _note_damage_threat(target: Dictionary, source_id: int, dealt: int) -> void
 	target.pulled = true
 	if not was_pulled:
 		_seed_opener_threat(target)
-	var amount := dealt
-	if str(src.get("subtype", "")) == "michael":
-		amount = dealt * Balance.TANK_THREAT_MULT / 100
-		if tick < threat_boost_until:
-			amount = amount * (100 + Balance.TAUNT_BOOST_PCT) / 100
+	var amount := dealt * _threat_of(src) / 100
 	_add_threat(target, source_id, amount)
 
 
@@ -3585,6 +3771,9 @@ func _threat_from_heal(source_id: int, amount: int) -> void:
 	if source_id == 0 or amount <= 0:
 		return
 	var pool := amount * Balance.HEAL_THREAT_PCT / 100
+	var healer := _ent(source_id)
+	if not healer.is_empty() and str(healer.get("team", "")) == "angel":
+		pool = pool * _threat_of(healer) / 100
 	if pool <= 0:
 		return
 	var engaged: Array = []
@@ -3947,6 +4136,8 @@ func unit_statuses(e: Dictionary) -> Array:
 			out.append(_status_row("taunt", "debuff", "TNT", 1, taunt_until - tick))
 	if int(e.get("untargetable_until", 0)) > tick:
 		out.append(_status_row("safe", "buff", "SAFE", 1, int(e.untargetable_until) - tick))
+	if int(e.get("dodge_until", 0)) > tick:
+		out.append(_status_row("dodge", "buff", "DODGE", int(e.get("dodge_bonus", 0)), int(e.dodge_until) - tick, Balance.DASH_DODGE_TICKS, false))
 	return out
 
 
@@ -4174,14 +4365,53 @@ func _vec(v) -> Vector2i:
 	return Vector2i.ZERO
 
 
-func _popup(pos: Vector2i, text: String, kind: String) -> void:
-	popups.append({"tick": tick, "pos": pos, "text": text, "kind": kind})
+func _popup(pos: Vector2i, text: String, kind: String, unit_id: int = 0, source: String = "") -> void:
+	if source != "" and unit_id != 0:
+		for p in popups:
+			if int(p.get("unit", 0)) != unit_id or str(p.get("source", "")) != source:
+				continue
+			var total := int(p.get("total", 0)) + _popup_amount(text)
+			var count := int(p.get("count", 1)) + 1
+			p.total = total
+			p.count = count
+			p.tick = tick
+			p.pos = pos
+			p.kind = kind
+			p.text = "%s %d x%d" % [source, total, count] if count > 1 else "%s %d" % [source, total]
+			return
+	var total0 := _popup_amount(text)
+	popups.append({
+		"tick": tick,
+		"pos": pos,
+		"text": text if source == "" else ("%s %d" % [source, total0]),
+		"kind": kind,
+		"unit": unit_id,
+		"source": source,
+		"count": 1,
+		"total": total0,
+	})
+
+
+func _popup_amount(text: String) -> int:
+	var digits := ""
+	var seen := false
+	for i in text.length():
+		var ch := text.substr(i, 1)
+		if ch >= "0" and ch <= "9":
+			digits += ch
+			seen = true
+		elif seen:
+			break
+	if digits == "":
+		return 0
+	return int(digits)
 
 
 func _prune_popups() -> void:
 	var keep: Array = []
 	for p in popups:
-		if tick - int(p.tick) <= 18:
+		var life := 10 if str(p.get("source", "")) in ["Corruption", "Rot"] else 18
+		if tick - int(p.tick) <= life:
 			keep.append(p)
 	popups = keep
 

@@ -1,9 +1,11 @@
 class_name DemonDirector
 extends RefCounted
-## Budget director. Priority: Survive, Protect the stake, Exploit the
-## stance, Spend excess Dark. The same commands a human demon will send.
-## Marches spend the bank down so the finale echo is what the siege
-## actually paid for, not the cap.
+## Kill-priority director. The goal is a wipe, not a surviving bank.
+## Finish a downed angel, break the answer, threaten the occupied room
+## within 2 seconds, deny a stake only as a kill setup, and bank only
+## what the next kill costs. The same submit() path a human demon uses.
+## Action types never repeat three times in a row. The seeded sim RNG
+## breaks ties so a seed still replays.
 
 const STANCE_TIGHT := 0
 const STANCE_SPREAD := 1
@@ -22,6 +24,13 @@ var pressure_lock := 0
 var silence_lock := 0
 var descended := false
 var last_priority := ""
+var recent: Array = []
+var recent_detail: Array = []
+var last_penalty := 0
+var last_why := ""
+var pending_kind := ""
+var pending_why := ""
+var _spent_spawn := false
 
 
 func setup(s) -> void:
@@ -29,55 +38,24 @@ func setup(s) -> void:
 
 
 func on_tick() -> void:
+	_spent_spawn = false
 	if sim.phase == "lucifer":
 		_press_boss()
 		return
 	if sim.phase != "dungeon" or descended:
 		return
-	# The room garrison is on the sim clock, not the decision gap. A 1.8s
-	# gap used to sit on top of the commit delay, and an off-screen pack
-	# could fill the cap before the party ever saw a mob.
 	_arm_branch_plan()
 	_fire_current_room()
 	if sim.tick < next_decision:
 		return
 	next_decision = sim.tick + _gap()
-	if _survive():
+	if _maybe_descend():
+		last_priority = "finish"
 		return
-	# Hold other purchases until this room's garrison exists. Spending
-	# the decision on the Gate Seal used to log a swarm the fog hides.
-	var here := str(sim.party_room())
-	if committed.has(here) and not resolved.has(here):
-		last_priority = "protect"
+	var choice := _choose()
+	if choice.is_empty():
 		return
-	if _fire_committed():
-		last_priority = "protect"
-		return
-	if _run_opening():
-		last_priority = "protect"
-		return
-	if _protect():
-		last_priority = "protect"
-		return
-	# Above the march line, excess Dark is spent before the next punish.
-	# A cooldown must not be a hole the bank refills through.
-	if _marching() and sim.dark > _vent_line() and _vent(6):
-		last_priority = "spend"
-		return
-	# Exploit wins the decision. While that punish is on cooldown the
-	# overflow still gets spent, or a long march refills the cap.
-	if sim.tick >= pressure_lock and _exploit():
-		var hold := 160
-		if sim.stage_reached == 1:
-			hold = 100
-		elif sim.stage_reached >= 2:
-			hold = 70
-		pressure_lock = sim.tick + hold
-		last_priority = "exploit"
-		return
-	if sim.dark > _vent_line() and _vent(8 if _marching() else 2):
-		last_priority = "spend"
-		return
+	_execute(choice)
 
 
 func _gap() -> int:
@@ -96,26 +74,14 @@ func _gap() -> int:
 	return 28
 
 
-func _survive() -> bool:
-	if _maybe_descend():
-		last_priority = "survive"
-		return true
-	return false
-
-
 func _maybe_descend() -> bool:
 	var room := str(sim.party_room())
 	if room == "throne":
 		_do_descend(false)
 		return true
-	# Early-descent gamble. The sanctum is open and the altar revive is not
-	# banked, but the party is already hurt. Arrive now, spend less Dark,
-	# and accept a weaker Lucifer plus a thinner echo.
 	if _early_room(room) and sim.stage_reached >= 2 and not sim.altar_done and sim.party_hp_pct() <= 48 and sim.dark >= 2500 and sim.rooms_cleared >= Balance.ELITE_ROOMS:
 		_do_descend(true)
 		return true
-	# The same lever, taken in panic: a party about to break is not worth
-	# the rest of the crawl, even if the altar is already claimed.
 	if _early_room(room) and sim.stage_reached >= 2 and sim.party_hp_pct() < 32 and sim.dark >= 3000 and sim.rooms_cleared >= Balance.ELITE_ROOMS:
 		_do_descend(true)
 		return true
@@ -123,7 +89,7 @@ func _maybe_descend() -> bool:
 
 
 func _early_room(room: String) -> bool:
-	return room in ["altar", "gallery3", "cross3", "fork3", "summoned3"]
+	return room in ["altar", "gallery3", "cross3", "fork3", "summoned3", "trapped3", "cursed3"]
 
 
 func _press_boss() -> void:
@@ -150,13 +116,15 @@ func _run_opening() -> bool:
 		return false
 	if not sim.can_read("trapped"):
 		return false
+	# Far nodes, so the party can read Still air before they step on it.
 	var pieces: Array = [
-		{"kind": "spike", "node": "trapped:choke"},
-		{"kind": "snare", "node": "trapped:center"},
+		{"kind": "spike", "node": "trapped:flank", "curse": "rot"},
+		{"kind": "snare", "node": "trapped:rear"},
 	]
 	var why := sim.legal_commit({"plan": "trap_cluster", "pieces": pieces})
 	if why == "":
 		sim.submit("commit", {"plan": "trap_cluster", "pieces": pieces}, "demon", 1)
+		_note("trap", "trap:cluster", 0, "east still air")
 		opening_done = true
 		resolved["trapped"] = true
 		return true
@@ -171,15 +139,24 @@ func _arm_branch_plan() -> void:
 	var kind := _kind(room)
 	if kind in ["summoned", "cursed", "trapped", "gallery"] and not committed.has(room) and not resolved.has(room):
 		committed[room] = sim.tick + Balance.ROOM_SPAWN_DELAY
-		sim.debug_line("plan %s in %s at tick %d" % [kind, room, int(committed[room])])
+		pending_kind = _signature(kind)
+		pending_why = "room commit"
+		sim.debug_line("plan %s in %s at tick %d (%s)" % [pending_kind, room, int(committed[room]), pending_why])
 
 
-## Seconds until the party's current room pays its committed plan. -1 if none.
 func next_spawn_in() -> int:
 	var room := str(sim.party_room())
 	if not committed.has(room) or resolved.has(room):
 		return -1
 	return maxi(0, int(committed[room]) - sim.tick)
+
+
+func _signature(kind: String) -> String:
+	if kind == "trapped":
+		return "trap"
+	if kind == "cursed":
+		return "curse"
+	return "pack"
 
 
 func _fire_current_room() -> void:
@@ -188,188 +165,388 @@ func _fire_current_room() -> void:
 		return
 	if sim.tick < int(committed[room]):
 		return
-	_fire_one(room, true)
+	_fire_one(room)
 
 
-func _fire_committed() -> bool:
-	var keys: Array = committed.keys()
-	keys.sort()
-	for room in keys:
-		if resolved.has(str(room)):
-			continue
-		if sim.tick < int(committed[room]):
-			continue
-		var here := str(room) == str(sim.party_room())
-		var state := _fire_one(str(room), here)
-		if state == "waiting":
-			return true
-		return true
-	return false
-
-
-func _fire_one(room: String, in_room: bool) -> String:
+func _fire_one(room: String) -> void:
 	if resolved.has(room):
-		return "done"
-	var kind := _kind(room)
-	var fired := false
-	var waiting := false
-	if kind == "summoned" or kind == "gallery":
-		var spawned := _spawn_into(room, in_room)
-		if spawned == "wait":
-			waiting = true
-		else:
-			fired = true
-	elif kind == "cursed":
-		var curse := "silence"
-		var target := "raphael"
-		if sim.curses_cast % 4 == 3:
-			curse = "weaken"
-			target = "azrael"
-		elif sim.stance == STANCE_SPREAD:
-			curse = "mark"
-		elif sim.angel_hp_pct("raphael") < 45:
-			curse = "rot"
-			target = sim.lowest_angel_subtype()
-		var why := sim.legal_curse(curse, target)
-		if why == "":
-			sim.submit("curse", {"kind": curse, "target": target}, "demon", 1)
-			sim.debug_line("buy %s on %s in %s" % [curse, target, room])
-			fired = true
-		elif why == "dark":
-			waiting = true
-		else:
-			fired = true
-	elif kind == "trapped":
-		if sim.traps_in_room(room) >= Balance.TRAP_CAP_PER_ROOM:
-			fired = true
-		elif sim.can_read(room) and sim.traps_in_room(room) == 0:
-			var pieces: Array = [
-				{"kind": "spike", "node": "%s:choke" % room},
-				{"kind": "hellflame", "node": "%s:center" % room},
-			]
-			var why_c := sim.legal_commit({"plan": "trap_cluster", "pieces": pieces})
-			if why_c == "":
-				sim.submit("commit", {"plan": "trap_cluster", "pieces": pieces}, "demon", 1)
-				sim.debug_line("buy trap cluster in %s" % room)
-				fired = true
-			elif why_c == "dark" or why_c == "busy":
-				waiting = true
-			else:
-				fired = _place_one_trap(room)
-		else:
-			fired = _place_one_trap(room)
-			if not fired and sim.legal_trap("hellflame", "%s:flank" % room) == "dark":
-				waiting = true
-				fired = false
-	else:
-		fired = true
-	if waiting:
-		sim.debug_line("wait on %s (%s), dark %d" % [room, kind, sim.dark])
-		return "waiting"
+		return
+	var options := _room_options(room, _kind(room))
+	var choice := _pick(options)
+	if choice.is_empty():
+		if sim.dark < 800 and _homed(room) == 0 and sim.traps_in_room(room) == 0:
+			return
+		resolved[room] = true
+		pending_kind = ""
+		return
+	_execute(choice)
+	if str(choice.get("wait", "")) == "dark":
+		return
 	resolved[room] = true
-	return "fired" if fired else "skip"
+	pending_kind = ""
 
 
-func _spawn_into(room: String, in_room: bool) -> String:
-	var unit := "heavy" if Balance.tier_ok("heavy", sim.rooms_cleared) else "swarm"
-	if unit == "swarm" and sim.seal_done:
-		unit = "heavy"
-	var node := "%s:center" % room
-	var garrison := in_room and _homed(room) == 0
-	var reason := sim.legal_spawn(unit, node, garrison)
-	if reason == "":
-		sim.submit("spawn", {"unit": unit, "node": node, "garrison": garrison}, "demon", 1)
-		sim.debug_line("buy %s at %s (%s)" % [unit, node, "garrison" if garrison else "paid"])
-		return "fired"
-	if reason == "dark":
-		return "wait"
-	if reason == "tier" and unit == "heavy":
-		var fallback := sim.legal_spawn("swarm", node, garrison)
-		if fallback == "" and not sim.seal_done:
-			sim.submit("spawn", {"unit": "swarm", "node": node, "garrison": garrison}, "demon", 1)
-			sim.debug_line("buy swarm at %s (heavy gated)" % node)
-			return "fired"
-		if fallback == "dark":
-			return "wait"
-	return "skip"
+func _choose() -> Dictionary:
+	var options: Array = []
+	if not opening_done and not opening_abandoned:
+		if _run_opening():
+			return {}
+	_opt_finish(options)
+	_opt_break(options)
+	_opt_empty_room(options)
+	_opt_stake(options)
+	_opt_spend(options)
+	return _pick(options)
 
 
-func _place_one_trap(room: String) -> bool:
-	var trap_node := "%s:flank" % room
-	var why2 := sim.legal_trap("hellflame", trap_node)
-	if why2 == "":
-		sim.submit("trap", {"kind": "hellflame", "node": trap_node}, "demon", 1)
-		return true
-	if why2 == "dark":
-		return false
-	return true
+func _opt_finish(options: Array) -> void:
+	if sim._downed_count() <= 0:
+		return
+	var who := ""
+	for a in sim._angels():
+		if not a.alive and not bool(a.get("final_death", false)):
+			who = str(a.subtype)
+			break
+	if who == "":
+		return
+	if sim.mob_near("raphael"):
+		options.append(_curse_opt("silence", "raphael", 1000, "finish downed"))
+		options.append(_curse_opt("rot", who, 980, "finish downed"))
+	_add_spawns(options, str(sim.party_room()), 960, "finish downed", true)
 
 
-func _protect() -> bool:
+func _opt_break(options: Array) -> void:
+	var grace := int(sim.curse_grace_until) - int(sim.tick)
+	if grace > 0 and grace <= 80:
+		var cloth := _cloth_target()
+		if sim.mob_near(cloth):
+			options.append(_curse_opt("rot", cloth, 860, "immunity ending"))
+	if _detect_up():
+		_add_traps(options, _ahead_room(), 840, "detect up", true)
+	if sim.taunt_until > sim.tick or sim.threat_boost_until > sim.tick:
+		var cloth2 := _cloth_target()
+		if sim.mob_near(cloth2):
+			options.append(_curse_opt("mark", cloth2, 820, "taunt holding"))
+		elif not _spent_spawn:
+			_add_spawns(options, str(sim.party_room()), 800, "taunt holding", false)
+
+
+func _opt_empty_room(options: Array) -> void:
+	var room := str(sim.party_room())
+	var kind := _kind(room)
+	if kind in ["start", "fork", "corridor", "throne", ""]:
+		return
+	if _room_has_threat(room):
+		return
+	if _spent_spawn:
+		return
+	var why := "room empty"
+	if kind in ["seal", "font", "altar"]:
+		why = "stake kill"
+	_add_spawns(options, room, 720, why, true)
+	if kind == "trapped":
+		_add_traps(options, room, 700, why, false)
+
+
+func _opt_stake(options: Array) -> void:
 	var stake := _wanted_stake()
 	if stake == "" or fortified.has(stake):
-		return false
-	# The fork used to fortify the Gate Seal the moment it was visited.
-	# That swarm logged "Imps claw their way in" from a room the fog does
-	# not show, then a second pack filled the cap before the first fight.
-	if _lobby() and str(sim.party_room()) != stake:
-		return false
-	if fortify_stake != stake:
-		fortify_stake = stake
-		fortify_step = 0
-	var unit := _defender(stake)
-	if fortify_step == 0:
-		if unit == "elite":
-			if not sim.can_read(stake):
-				return false
-			if sim.elite_alive() or sim.commitment_open("elite"):
-				fortify_step = 1
-			else:
-				var node := "%s:rear" % stake
-				var why := sim.legal_commit({"plan": "elite", "node": node})
-				if why == "":
-					sim.submit("commit", {"plan": "elite", "node": node}, "demon", 1)
-					fortify_step = 1
-					return true
-				if why == "dark" or why == "busy":
-					return true
-				fortify_step = 1
-		else:
-			var node2 := "%s:%s" % [stake, "rear" if stake == "altar" else "center"]
-			var reason := sim.legal_spawn(unit, node2)
-			if reason == "":
-				sim.submit("spawn", {"unit": unit, "node": node2}, "demon", 1)
-				fortify_step = 1
-				return true
-			if reason == "dark":
-				return true
-			if reason == "tier":
-				return false
-			fortify_step = 1
-	if fortify_step == 1 and unit == "elite" and sim.commitment_open("elite") and not sim.elite_alive():
+		return
+	var here := str(sim.party_room())
+	if here != stake and here != _approach(stake):
+		return
+	if stake == "altar" and Balance.tier_ok("elite", sim.rooms_cleared) and not sim.elite_alive() and not sim.commitment_open("elite"):
+		var node := "altar:rear"
+		if sim.legal_commit({"plan": "elite", "node": node}) == "":
+			options.append({
+				"type": "commit",
+				"detail": "spawn:elite",
+				"action": "spawn",
+				"plan": "elite",
+				"node": node,
+				"score": 680,
+				"why": "stake kill",
+			})
+		return
+	if not _room_has_threat(stake) and not _spent_spawn:
+		_add_spawns(options, stake, 640, "stake kill", false)
+
+
+func _opt_spend(options: Array) -> void:
+	if _lobby():
+		return
+	var bank := _kill_bank()
+	if sim.dark <= bank:
+		return
+	var ahead := _ahead_room()
+	if ahead != "" and ahead != str(sim.party_room()) and _homed(ahead) == 0:
+		_add_spawns(options, ahead, 140, "spend", false)
+	_add_traps(options, ahead if ahead != "" else str(sim.party_room()), 120, "spend", true)
+	if sim.curses_cast % 4 == 3:
+		var who := "azrael" if sim.mob_near("azrael") else _any_near()
+		if who != "":
+			options.append(_curse_opt("weaken", who, 160, "spend"))
+	else:
+		var who2 := _any_near()
+		if who2 != "":
+			var kinds := ["rot", "mark", "silence"]
+			var curse := str(kinds[sim.curses_cast % kinds.size()])
+			options.append(_curse_opt(curse, who2, 150, "spend"))
+
+
+func _room_options(room: String, kind: String) -> Array:
+	var options: Array = []
+	var why := "room commit"
+	if kind == "trapped":
+		_add_traps(options, room, 700, why, false)
+		if options.is_empty():
+			_add_traps(options, _ahead_room(), 680, why, true)
+		if _homed(room) == 0:
+			_add_spawns(options, room, 660, why, true)
+	elif kind == "cursed":
+		var who := _any_near()
+		if who != "":
+			var curse := "weaken" if sim.curses_cast % 4 == 3 else "rot"
+			options.append(_curse_opt(curse, who, 700, why))
+		if _homed(room) == 0:
+			_add_spawns(options, room, 660, why, true)
+	else:
+		_add_spawns(options, room, 700, why, true)
+		if _homed(room) == 0 and options.is_empty():
+			_add_spawns(options, room, 700, why, true)
+	return options
+
+
+func _add_spawns(options: Array, room: String, score: int, why: String, garrison: bool) -> void:
+	if room == "" or _kind(room) in ["start", "fork", "corridor", "throne"]:
+		return
+	var units: Array = []
+	if Balance.tier_ok("heavy", sim.rooms_cleared):
+		units.append("heavy")
+	if not sim.seal_done:
+		units.append("swarm")
+	if units.is_empty():
+		return
+	var nodes := ["center", "flank", "rear", "choke"]
+	var added := 0
+	for unit in units:
+		for node_name in nodes:
+			var node := "%s:%s" % [room, node_name]
+			if sim.map.node_tile(node).x < 0:
+				continue
+			var in_room := room == str(sim.party_room())
+			var use_garrison := garrison and in_room and _homed(room) == 0
+			if sim.legal_spawn(str(unit), node, use_garrison) != "":
+				continue
+			if not use_garrison and not _can_pay(Balance.summon_cost(str(unit))):
+				continue
+			var bias := 25 if str(unit) == "heavy" else 0
+			options.append({
+				"type": "spawn",
+				"detail": "spawn:%s" % unit,
+				"action": "spawn",
+				"unit": str(unit),
+				"node": node,
+				"garrison": use_garrison,
+				"score": score + bias,
+				"why": why,
+			})
+			added += 1
+			if added >= 4:
+				return
+
+
+func _add_traps(options: Array, room: String, score: int, why: String, allow_curse: bool) -> void:
+	if room == "" or sim.traps_in_room(room) >= Balance.TRAP_CAP_PER_ROOM:
+		return
+	var kinds := ["spike", "snare", "hellflame"]
+	var nodes := ["rear", "flank", "center", "choke"]
+	var added := 0
+	for kind in kinds:
+		for node_name in nodes:
+			var node := "%s:%s" % [room, node_name]
+			if sim.map.node_tile(node).x < 0:
+				continue
+			if sim.legal_trap(str(kind), node) != "":
+				continue
+			if not _can_pay(Balance.trap_cost(str(kind))):
+				continue
+			var curse := ""
+			if allow_curse or _kind(room) == "cursed" or (_kind(room) == "trapped" and sim.traps_placed % 2 == 0):
+				curse = "rot" if sim.traps_placed % 3 != 2 else "weaken"
+			options.append({
+				"type": "trap",
+				"detail": "trap:%s" % kind,
+				"action": "trap",
+				"kind": str(kind),
+				"node": node,
+				"curse": curse,
+				"score": score,
+				"why": why,
+			})
+			added += 1
+			if added >= 3:
+				return
+
+
+func _curse_opt(kind: String, who: String, score: int, why: String) -> Dictionary:
+	return {
+		"type": "curse",
+		"detail": "curse:%s" % kind,
+		"action": "curse",
+		"kind": kind,
+		"target": who,
+		"score": score,
+		"why": why,
+	}
+
+
+func _pick(options: Array) -> Dictionary:
+	var best := -1 << 30
+	var tied: Array = []
+	for raw in options:
+		var opt: Dictionary = raw
+		if opt.is_empty():
+			continue
+		if str(opt.get("type", "")) == "curse":
+			if sim.legal_curse(str(opt.get("kind", "")), str(opt.get("target", ""))) != "":
+				continue
+			if not sim.mob_near(str(opt.get("target", ""))):
+				continue
+		var pen := _penalty(str(opt.get("action", "")), str(opt.get("detail", "")))
+		if pen >= 100000:
+			continue
+		var score := int(opt.get("score", 0)) - pen
+		opt["penalty"] = pen
+		if score > best:
+			best = score
+			tied = [opt]
+		elif score == best:
+			tied.append(opt)
+	if tied.is_empty():
+		return {}
+	tied.sort_custom(func(a, b): return str(a.get("detail", "")) < str(b.get("detail", "")))
+	var idx := 0
+	if tied.size() > 1:
+		idx = sim.rand_below(tied.size())
+	return tied[idx]
+
+
+func _execute(choice: Dictionary) -> void:
+	var action := str(choice.get("action", ""))
+	var detail := str(choice.get("detail", ""))
+	var why := str(choice.get("why", ""))
+	var pen := int(choice.get("penalty", _penalty(action, detail)))
+	var kind := str(choice.get("type", ""))
+	if kind == "spawn":
+		sim.submit("spawn", {
+			"unit": str(choice.get("unit", "imp")),
+			"node": str(choice.get("node", "")),
+			"garrison": bool(choice.get("garrison", false)),
+		}, "demon", 1)
+		_spent_spawn = true
+		pending_kind = "pack"
+	elif kind == "trap":
+		var args := {"kind": str(choice.get("kind", "spike")), "node": str(choice.get("node", ""))}
+		if str(choice.get("curse", "")) != "":
+			args["curse"] = str(choice.curse)
+		sim.submit("trap", args, "demon", 1)
+		pending_kind = "trap"
+	elif kind == "curse":
+		sim.submit("curse", {"kind": str(choice.get("kind", "")), "target": str(choice.get("target", ""))}, "demon", 1)
+		if str(choice.get("kind", "")) == "silence":
+			silence_lock = sim.tick + 220
+		pending_kind = "curse"
+	elif kind == "commit":
+		sim.submit("commit", {"plan": str(choice.get("plan", "")), "node": str(choice.get("node", ""))}, "demon", 1)
+		fortified["altar"] = true
+		pending_kind = "pack"
+	else:
+		return
+	pending_why = why
+	last_priority = why
+	_note(action, detail, pen, why)
+	sim.debug_line("buy %s (%s)" % [detail, why])
+
+
+func _note(action: String, detail: String, penalty: int, why: String) -> void:
+	recent.append(action)
+	recent_detail.append(detail)
+	while recent.size() > 8:
+		recent.pop_front()
+		recent_detail.pop_front()
+	last_penalty = penalty
+	last_why = why
+	sim.debug_line("variance penalty %d on %s (%s)" % [penalty, detail, why])
+
+
+func _penalty(action: String, detail: String) -> int:
+	if recent.size() >= 2 and str(recent[recent.size() - 1]) == action and str(recent[recent.size() - 2]) == action:
+		return 100000
+	var pen := 0
+	for prev in recent:
+		if str(prev) == action:
+			pen += 15
+	for prev_d in recent_detail:
+		if str(prev_d) == detail:
+			pen += 30
+	return pen
+
+
+func _can_pay(cost: int) -> bool:
+	return sim.dark - cost >= 0
+
+
+func _kill_bank() -> int:
+	if not sim.altar_done and sim.stage_reached >= 2 and Balance.tier_ok("elite", sim.rooms_cleared) and not sim.elite_alive():
+		return Balance.summon_cost("elite")
+	if Balance.tier_ok("heavy", sim.rooms_cleared):
+		return Balance.summon_cost("heavy")
+	return Balance.summon_cost("swarm")
+
+
+func _room_has_threat(room: String) -> bool:
+	if _homed(room) > 0 or sim.traps_in_room(room) > 0:
 		return true
-	if fortify_step == 1:
-		var trap := "spike" if stake == "seal" else "hellflame"
-		var choke := "%s:choke" % stake
-		var why3 := sim.legal_trap(trap, choke)
-		if why3 == "":
-			sim.submit("trap", {"kind": trap, "node": choke}, "demon", 1)
-			fortified[stake] = true
-			return true
-		if why3 == "dark":
-			return true
-		fortified[stake] = true
 	return false
 
 
-func _defender(stake: String) -> String:
-	if stake == "altar" and Balance.tier_ok("elite", sim.rooms_cleared):
-		return "elite"
-	if Balance.tier_ok("heavy", sim.rooms_cleared):
-		return "heavy"
-	if not sim.seal_done:
-		return "swarm"
-	return "heavy"
+func _detect_up() -> bool:
+	for id in sim.order:
+		var e: Dictionary = sim.entities[id]
+		if str(e.get("kind", "")) == "trap" and bool(e.get("revealed", false)) and bool(e.get("armed", false)):
+			return true
+	return false
+
+
+func _cloth_target() -> String:
+	var best := "uriel"
+	var best_hp := 1 << 30
+	for name in ["uriel", "gabriel", "raphael", "azrael"]:
+		var a := sim._hero(name)
+		if a.is_empty() or not a.alive:
+			continue
+		if int(a.hp) < best_hp:
+			best_hp = int(a.hp)
+			best = name
+	return best
+
+
+func _any_near() -> String:
+	for name in ["raphael", "uriel", "gabriel", "azrael", "michael"]:
+		if sim.mob_near(name):
+			return name
+	return ""
+
+
+func _approach(stake: String) -> String:
+	if stake == "seal":
+		return "cross"
+	if stake == "font":
+		return "cross2"
+	if stake == "altar":
+		return "cross3"
+	return ""
 
 
 func _wanted_stake() -> String:
@@ -382,297 +559,6 @@ func _wanted_stake() -> String:
 	return ""
 
 
-func _exploit() -> bool:
-	# The opening stage is the fork puzzle, not a swarm clock.
-	if sim.stage_reached <= 0 and sim.dark < 7500:
-		return false
-	if _exploit_weakness():
-		return true
-	if sim.mob_count() >= Balance.MOB_CAP:
-		return false
-	return _reinforce_ahead(0)
-
-
-func _exploit_weakness() -> bool:
-	if sim.curse_pending_or_active():
-		return false
-	var stance: int = sim.stance
-	if stance == STANCE_SPREAD and not _lobby() and sim.legal_curse("mark", "raphael") == "" and _can_pay(Balance.curse_cost("mark"), 0):
-		sim.submit("curse", {"kind": "mark", "target": "raphael"}, "demon", 1)
-		return true
-	if stance == STANCE_TIGHT:
-		var node := _ahead_node()
-		if node != "" and sim.legal_trap("hellflame", node) == "" and _can_pay(Balance.trap_cost("hellflame"), 0):
-			sim.submit("trap", {"kind": "hellflame", "node": node}, "demon", 1)
-			return true
-	if stance == STANCE_COLUMN:
-		var node2 := _ahead_node()
-		if node2 != "" and sim.legal_trap("spike", node2) == "" and _can_pay(Balance.trap_cost("spike"), 0):
-			sim.submit("trap", {"kind": "spike", "node": node2}, "demon", 1)
-			return true
-		if node2 != "" and sim.legal_trap("snare", node2) == "" and _can_pay(Balance.trap_cost("snare"), 0):
-			sim.submit("trap", {"kind": "snare", "node": node2}, "demon", 1)
-			return true
-	if sim.lowest_angel_hp_pct() < 48 and sim.stage_reached >= 1:
-		var who: String = sim.lowest_angel_subtype()
-		if sim.legal_curse("rot", who) == "" and _can_pay(Balance.curse_cost("rot"), 0):
-			sim.submit("curse", {"kind": "rot", "target": who}, "demon", 1)
-			return true
-	return false
-
-
-func _vent(limit: int) -> bool:
-	var reserved := 0
-	var blocked := {"spawn": false, "trap": false, "curse": false}
-	var used_nodes := {}
-	var did := false
-	for _i in limit:
-		if sim.dark - reserved <= _vent_line():
-			break
-		var order := _spend_order()
-		var progressed := false
-		for kind in order:
-			if bool(blocked[kind]):
-				continue
-			var cost := 0
-			if kind == "spawn":
-				cost = _try_spawn(reserved)
-			elif kind == "trap":
-				cost = _try_trap(reserved, used_nodes)
-			else:
-				cost = _try_curse(reserved)
-			if cost > 0:
-				reserved += cost
-				did = true
-				progressed = true
-				blocked[kind] = true
-				break
-			blocked[kind] = true
-		if not progressed:
-			break
-	return did
-
-
-func _try_spawn(reserved: int) -> int:
-	# Do not pre-seed the next branch while the party is still in the opening.
-	if _lobby():
-		return 0
-	var room := _next_content_room()
-	if room == "" or room == str(sim.party_room()):
-		return 0
-	if _kind(room) in ["throne", "fork", "start", "seal", "font", "altar"]:
-		return 0
-	if _homed(room) > 0:
-		return 0
-	var unit := "swarm"
-	if Balance.tier_ok("heavy", sim.rooms_cleared):
-		unit = "heavy"
-	elif sim.seal_done:
-		return 0
-	var node := "%s:center" % room
-	if sim.map.node_tile(node).x < 0:
-		return 0
-	if sim.legal_spawn(unit, node) != "":
-		if unit == "heavy" and not sim.seal_done and sim.legal_spawn("swarm", node) == "":
-			unit = "swarm"
-		else:
-			return 0
-	var cost := Balance.summon_cost(unit)
-	if not _can_pay(cost, reserved):
-		return 0
-	sim.submit("spawn", {"unit": unit, "node": node}, "demon", 1)
-	return cost
-
-
-func _reinforce_ahead(reserved: int) -> bool:
-	return _try_spawn(reserved) > 0
-
-
-func _try_trap(reserved: int, used_nodes: Dictionary) -> int:
-	var node := _ahead_trap_node(used_nodes)
-	if node == "":
-		return 0
-	var room := node.split(":")[0]
-	var info = sim.map.by_id.get(room, {})
-	var corridor := false
-	if not info.is_empty():
-		corridor = bool(info.get("corridor", false))
-	var kind := "spike"
-	if corridor:
-		kind = "snare" if sim.traps_placed % 3 == 2 else "spike"
-	else:
-		var kinds := ["spike", "snare", "hellflame"]
-		kind = str(kinds[sim.traps_placed % 3])
-	if sim.legal_trap(kind, node) != "":
-		kind = "spike"
-		if sim.legal_trap(kind, node) != "":
-			return 0
-	var queued := 0
-	for used in used_nodes.keys():
-		if str(used).begins_with(room + ":"):
-			queued += 1
-	if sim.traps_in_room(room) + queued >= Balance.TRAP_CAP_PER_ROOM:
-		return 0
-	var cost := Balance.trap_cost(kind)
-	if not _can_pay(cost, reserved):
-		return 0
-	sim.submit("trap", {"kind": kind, "node": node}, "demon", 1)
-	used_nodes[node] = true
-	return cost
-
-
-## The antechamber, the fork, and the halls that lead into the first
-## branch are not a fight yet. The east door is depth 1, so max_depth
-## alone used to end the lobby in that hall and drop a swarm on the
-## Gate Seal — logged, fogged, and invisible.
-func _lobby() -> bool:
-	if sim.phase == "lucifer":
-		return false
-	if sim.stage_reached > 0 or sim.rooms_cleared > 0 or sim.seal_done:
-		return false
-	var kind := _kind(str(sim.party_room()))
-	if kind in ["summoned", "cursed", "trapped", "gallery"]:
-		return false
-	return true
-
-
-func _try_curse(reserved: int) -> int:
-	if _lobby():
-		return 0
-	if sim._curse_casting() or sim._command_pending("curse"):
-		return 0
-	# Prefer a hero who is clean. Refresh Rot or Mark when the bank is
-	# still over the line — Silence is not refreshed, so it cannot stick.
-	var fresh: Array = []
-	var refresh: Array = []
-	if int(sim._hero("michael").get("rot_until", 0)) <= sim.tick:
-		fresh.append(["rot", "michael"])
-	else:
-		refresh.append(["rot", "michael"])
-	if int(sim._hero("uriel").get("mark_until", 0)) <= sim.tick:
-		fresh.append(["mark", "uriel"])
-	else:
-		refresh.append(["mark", "uriel"])
-	if sim.tick >= silence_lock and int(sim._hero("azrael").get("silence_until", 0)) <= sim.tick:
-		fresh.append(["silence", "azrael"])
-	var options: Array = []
-	# Every fourth curse leads with Weaken. Otherwise it is the fallback
-	# when Silence, Rot, and Mark cannot be paid.
-	if sim.curses_cast % 4 == 3:
-		options.append(["weaken", "azrael"])
-	options.append_array(fresh)
-	options.append_array(refresh)
-	options.append(["weaken", "uriel"])
-	# Michael, Uriel, and Azrael are the named targets. When all three are
-	# dead the vent used to stop, and a healer standing outside leash never
-	# died. Fall back to whoever is still up.
-	var named_ok := false
-	for opt in options:
-		if sim.legal_curse(str(opt[0]), str(opt[1])) == "":
-			named_ok = true
-			break
-	if not named_ok:
-		var last := sim.lowest_angel_subtype()
-		if last != "":
-			options.append(["rot", last])
-	for opt in options:
-		var curse := str(opt[0])
-		var who := str(opt[1])
-		var cost := Balance.curse_cost(curse)
-		if not _can_pay(cost, reserved):
-			continue
-		if sim.legal_curse(curse, who) != "":
-			continue
-		sim.submit("curse", {"kind": curse, "target": who}, "demon", 1)
-		if curse == "silence":
-			silence_lock = sim.tick + 220
-		return cost
-	return 0
-
-
-func _spend_order() -> Array:
-	var rows: Array = [
-		["curse", sim.curses_cast],
-		["spawn", sim.spawns_placed],
-		["trap", sim.traps_placed],
-	]
-	rows.sort_custom(func(a, b):
-		if int(a[1]) != int(b[1]):
-			return int(a[1]) < int(b[1])
-		return str(a[0]) < str(b[0])
-	)
-	var out: Array = []
-	for row in rows:
-		out.append(str(row[0]))
-	return out
-
-
-func _vent_line() -> int:
-	var line := _reserve()
-	if _marching():
-		var idx := clampi(sim.stage_reached, 0, Balance.MARCH_BANK.size() - 1)
-		line = maxi(line, int(Balance.MARCH_BANK[idx]))
-	else:
-		line = maxi(line, 8500 if sim.stage_reached <= 0 else 7800)
-	return line
-
-
-func _can_pay(cost: int, reserved: int) -> bool:
-	return sim.dark - reserved - cost >= _reserve()
-
-
-func _reserve() -> int:
-	if _objective_threatened():
-		return 0
-	if _elite_still_to_buy():
-		return Balance.summon_cost("elite")
-	if not sim.font_done and not fortified.has("font") and sim.stage_reached >= 1 and Balance.tier_ok("heavy", sim.rooms_cleared):
-		return Balance.summon_cost("heavy")
-	if sim.stage_reached >= 2:
-		return 600
-	return 1500
-
-
-func _elite_still_to_buy() -> bool:
-	if sim.altar_done or fortified.has("altar"):
-		return false
-	if sim.stage_reached < 2 or not Balance.tier_ok("elite", sim.rooms_cleared):
-		return false
-	if sim.elite_alive() or sim.commitment_open("elite"):
-		return false
-	return true
-
-
-func _marching() -> bool:
-	if sim.phase != "dungeon":
-		return false
-	var info = sim.map.by_id.get(str(sim.party_room()), {})
-	if info.is_empty():
-		return false
-	if bool(info.get("corridor", false)):
-		return true
-	if str(info.get("kind", "")) in ["gallery", "cross"] and not sim.path.is_empty() and sim._hostiles_in_room(str(sim.party_room())) == 0:
-		return true
-	return false
-
-
-func _objective_threatened() -> bool:
-	var room := str(sim.party_room())
-	if room == "throne" or _kind(room) == "throne":
-		return true
-	var stake := _wanted_stake()
-	if stake == "":
-		return false
-	if room == stake:
-		return true
-	var info = sim.map.by_id.get(room, {})
-	if info.is_empty():
-		return false
-	if bool(info.corridor) and info.neighbors.has(stake):
-		return true
-	return false
-
-
 func _homed(room: String) -> int:
 	var n := 0
 	for id in sim.order:
@@ -682,59 +568,19 @@ func _homed(room: String) -> int:
 	return n
 
 
-func _ahead_node() -> String:
-	return _ahead_trap_node({})
+func _ahead_room() -> String:
+	return _next_content_room()
 
 
-func _ahead_trap_node(used_nodes: Dictionary) -> String:
-	var start := str(sim.party_room())
-	var queue: Array = [start]
-	var seen := {start: true}
-	var qi := 0
-	var steps := 0
-	while qi < queue.size() and steps < 16:
-		var cur: String = str(queue[qi])
-		qi += 1
-		steps += 1
-		var room = sim.map.by_id.get(cur, {})
-		if room.is_empty():
-			continue
-		var neigh: Array = room.neighbors.duplicate()
-		neigh.sort()
-		for n in neigh:
-			var nid := str(n)
-			if seen.has(nid):
-				continue
-			var other = sim.map.by_id.get(nid, {})
-			if other.is_empty():
-				continue
-			if int(other.get("stage", 0)) < int(room.get("stage", 0)):
-				continue
-			seen[nid] = true
-			if nid != start and _kind(nid) not in ["fork", "start", "seal", "font", "altar", "throne"]:
-				var picked := _open_node(nid, used_nodes)
-				if picked != "":
-					return picked
-			if other.corridor or _kind(nid) in ["gallery", "cross", "trapped", "summoned", "cursed"]:
-				queue.append(nid)
-	return ""
-
-
-func _open_node(room_id: String, used_nodes: Dictionary) -> String:
-	var queued := 0
-	for used in used_nodes.keys():
-		if str(used).begins_with(room_id + ":"):
-			queued += 1
-	if sim.traps_in_room(room_id) + queued >= Balance.TRAP_CAP_PER_ROOM:
-		return ""
-	var keys: Array = sim.map.node_keys(room_id)
-	for key in keys:
-		var node := str(key)
-		if used_nodes.has(node):
-			continue
-		if sim.legal_trap("spike", node) == "" or sim.legal_trap("snare", node) == "" or sim.legal_trap("hellflame", node) == "":
-			return node
-	return ""
+func _lobby() -> bool:
+	if sim.phase == "lucifer":
+		return false
+	if sim.stage_reached > 0 or sim.rooms_cleared > 0 or sim.seal_done:
+		return false
+	var kind := _kind(str(sim.party_room()))
+	if kind in ["summoned", "cursed", "trapped", "gallery"]:
+		return false
+	return true
 
 
 func _next_content_room() -> String:
@@ -776,3 +622,16 @@ func _kind(room: String) -> String:
 	if info.is_empty():
 		return ""
 	return str(info.get("kind", ""))
+
+
+func _marching() -> bool:
+	if sim.phase != "dungeon":
+		return false
+	var info = sim.map.by_id.get(str(sim.party_room()), {})
+	if info.is_empty():
+		return false
+	if bool(info.get("corridor", false)):
+		return true
+	if str(info.get("kind", "")) in ["gallery", "cross"] and not sim.path.is_empty() and sim._hostiles_in_room(str(sim.party_room())) == 0:
+		return true
+	return false

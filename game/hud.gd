@@ -20,6 +20,11 @@ var _zoom_out: Button
 var _zoom_l: Label
 var _bar := {}
 var _acts := {}
+var _tabs := {}
+var _panic := {}
+var _tab := "michael"
+var _sheet: Label
+var _cue: Label
 var _stances := {}
 var _scatter: Button
 var _phalanx: Button
@@ -73,6 +78,15 @@ const ROLE_VERB := {
 	"uriel": "Sunstrike",
 	"gabriel": "Cleanse",
 }
+const TAB_ORDER := ["michael", "raphael", "azrael", "uriel", "gabriel"]
+const TAB_ACTS := {
+	"michael": ["taunt", "shield", "block"],
+	"raphael": ["mend", "team", "revive"],
+	"azrael": ["strike", "burst", "detect", "dash"],
+	"uriel": ["sunstrike", "beam", "zone", "retreat"],
+	"gabriel": ["cleanse", "aegis", "rescue"],
+}
+const PANIC_ORDER := ["taunt", "team", "cleanse"]
 
 
 func _ready() -> void:
@@ -140,11 +154,26 @@ func build() -> void:
 	for i in cmds.size():
 		var b2 := _btn(cmds[i].capitalize(), Vector2(748 + i * 104, 620), Vector2(100, 88), _on_cmd.bind(cmds[i]))
 		_bar[cmds[i]] = b2
-	var act_names := ["taunt", "shield", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
-	var act_labels := ["Taunt", "Shield", "Heal", "Team", "Strike", "Sunstrike", "Block", "Revive", "Dash", "Beam", "Zone", "Retreat", "Aegis", "Rescue"]
+	var act_names := ["taunt", "shield", "mend", "team", "strike", "burst", "detect", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "cleanse", "aegis", "rescue"]
+	var act_labels := ["Taunt", "Shield", "Heal", "Party Heal", "Strike", "Burst", "Detect", "Sunstrike", "Block", "Revive", "Dash", "Beam", "Zone", "Retreat", "Cleanse", "Aegis", "Rescue"]
 	for j in act_names.size():
-		var b3 := _btn(act_labels[j], Vector2(748 + j * 130, 540), Vector2(122, 72), _on_act.bind(act_names[j]))
+		var b3 := _btn(act_labels[j], Vector2(200, 540), Vector2(160, 72), _on_act.bind(act_names[j]))
 		_acts[act_names[j]] = b3
+	var hero_names := ["michael", "raphael", "azrael", "uriel", "gabriel"]
+	for h in hero_names.size():
+		var tab := _btn(hero_names[h].capitalize(), Vector2(200, 480), Vector2(120, 64), _on_tab.bind(hero_names[h]))
+		_tabs[hero_names[h]] = tab
+	_panic["taunt"] = _btn("Taunt", Vector2(820, 480), Vector2(120, 64), _on_act.bind("taunt"))
+	_panic["team"] = _btn("Party Heal", Vector2(948, 480), Vector2(140, 64), _on_act.bind("team"))
+	_panic["cleanse"] = _btn("Cleanse", Vector2(1096, 480), Vector2(140, 64), _on_act.bind("cleanse"))
+	_cue = _label(Vector2(210, 120), "", 16)
+	_cue.size = Vector2(760, 24)
+	_sheet = _label(Vector2(200, 150), "", 15)
+	_sheet.size = Vector2(340, 210)
+	_sheet.visible = false
+	_sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sheet.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_cue.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	for cmd in _bar.keys():
 		var hidden: Button = _bar[cmd]
 		hidden.visible = false
@@ -262,7 +291,13 @@ func refresh(snap: Dictionary) -> void:
 		if spawn_in < 0:
 			_spawn_l.text = ""
 		else:
-			_spawn_l.text = "Next spawn in %0.1fs" % (float(spawn_in) / 20.0)
+			var kind := str(snap.get("next_spawn_kind", ""))
+			var why := str(snap.get("next_spawn_why", ""))
+			var label := {"pack": "Pack", "trap": "Traps", "curse": "Curse"}.get(kind, kind.capitalize() if kind != "" else "Threat")
+			_spawn_l.text = "%s in %0.1fs — %s" % [label, float(spawn_in) / 20.0, why]
+	if _cue:
+		_cue.text = _cue_line(snap)
+	_refresh_sheet(snap)
 	if _seed_l:
 		_seed_l.text = "Seed %d" % int(snap.get("seed", 1))
 	_refresh_debug(snap)
@@ -274,6 +309,7 @@ func refresh(snap: Dictionary) -> void:
 	_set_cd(_scatter, int(snap.scatter_cd), Balance.cooldown("scatter"))
 	_set_cd(_phalanx, int(snap.phalanx_cd), Balance.cooldown("phalanx"))
 	_refresh_acts(snap)
+	_refresh_panic(snap)
 	_passive.text = _passive_line(_highlight) if _highlight != "" else ""
 	for cmd in _bar.keys():
 		var info: Dictionary = snap.bar[cmd]
@@ -512,12 +548,14 @@ func _place_meters(w: float) -> void:
 
 func _layout_wide(w: float, h: float) -> void:
 	_place_meters(w)
-	var act_y := h - 156.0
-	var util_y := h - 80.0
-	var coach_y := act_y - 64.0
+	var stance_y := h - 80.0
+	var skill_y := h - 164.0
+	var tab_y := h - 236.0
+	var coach_y := tab_y - 64.0
 	var log_y := coach_y - 96.0
-	_place_row(_util_buttons(), util_y, 72.0, w, 8.0)
-	_place_acts(act_y, 64.0, w, 8.0)
+	_place_row(_util_buttons(), stance_y, 72.0, w, 200.0)
+	_place_tabs(tab_y, w)
+	_place_acts(skill_y, 72.0, w, 200.0)
 	_place_log(Vector2(210, log_y), Vector2(maxi(w - 380.0, 200.0), 88.0))
 	if _passive:
 		_passive.position = Vector2(210, log_y - 20.0)
@@ -527,24 +565,27 @@ func _layout_wide(w: float, h: float) -> void:
 		_coach_bg.size = Vector2(maxi(w - 210.0 - 156.0, 80.0), 56)
 	if _coach:
 		_coach.position = Vector2(218, coach_y + 4.0)
-		_coach.size = Vector2(maxi(w - 400.0, 80.0), 48)
+		_coach.size = Vector2(maxi(w - 400.0, 80.0), 22)
 		_coach.clip_text = false
 		_coach.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _hide:
 		_hide.position = Vector2(w - 148.0, coach_y)
 		_hide.size = Vector2(140, 56)
+	_place_readout(210.0, coach_y, maxi(w - 380.0, 200.0))
 	_place_column()
 	_place_debug_button()
 
 
 func _layout_narrow(w: float, h: float) -> void:
 	_place_meters(w)
-	var act_y := h - 156.0
-	var util_y := h - 80.0
-	var coach_y := act_y - 64.0
+	var stance_y := h - 80.0
+	var skill_y := h - 164.0
+	var tab_y := h - 236.0
+	var coach_y := tab_y - 64.0
 	var log_y := coach_y - 96.0
-	_place_acts(act_y, 64.0, w, 8.0)
-	_place_row(_util_buttons(), util_y, 72.0, w, 8.0)
+	_place_tabs(tab_y, w)
+	_place_acts(skill_y, 72.0, w, 8.0)
+	_place_row(_util_buttons(), stance_y, 72.0, w, 8.0)
 	_place_log(Vector2(16, log_y), Vector2(w - 32.0, 88.0))
 	if _passive:
 		_passive.position = Vector2(16, log_y - 20.0)
@@ -554,14 +595,24 @@ func _layout_narrow(w: float, h: float) -> void:
 		_coach_bg.size = Vector2(maxi(w - 180.0, 80.0), 56)
 	if _coach:
 		_coach.position = Vector2(24, coach_y + 4.0)
-		_coach.size = Vector2(maxi(w - 210.0, 80.0), 48)
+		_coach.size = Vector2(maxi(w - 210.0, 80.0), 22)
 		_coach.clip_text = false
 		_coach.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _hide:
 		_hide.position = Vector2(w - 148.0, coach_y)
 		_hide.size = Vector2(132, 56)
+	_place_readout(16.0, coach_y, maxi(w - 32.0, 80.0))
 	_place_column()
 	_place_debug_button()
+
+
+func _place_readout(left: float, coach_y: float, width: float) -> void:
+	if _cue:
+		_cue.position = Vector2(left + 8.0, coach_y + 28.0)
+		_cue.size = Vector2(maxi(width - 16.0, 40.0), 22)
+	if _sheet:
+		_sheet.position = Vector2(left, 148)
+		_sheet.size = Vector2(mini(360.0, width), 210)
 
 
 func _place_log(at: Vector2, sz: Vector2) -> void:
@@ -911,12 +962,20 @@ func _refresh_debug(snap: Dictionary) -> void:
 			snap.get("god_mode", false), snap.get("infinite_elixir", false), snap.get("curses_on", true), snap.get("traps_on", true),
 		])
 		var heroes: Dictionary = snap.get("heroes", {})
+		file.store_line("variance penalty %s next %s (%s)" % [
+			snap.get("variance_penalty", 0), snap.get("next_spawn_kind", ""), snap.get("next_spawn_why", ""),
+		])
+		var sheets_f: Dictionary = snap.get("sheets", {})
 		for subtype in heroes.keys():
 			var hs: Dictionary = heroes[subtype]
+			var shf: Dictionary = sheets_f.get(str(subtype), {})
 			file.store_line("hero %s hp %s/%s threat %s downed %s final %s silence %s rot %s mark %s weaken %s" % [
 				subtype, hs.get("hp", 0), hs.get("hp_max", 0), int(threat_of.get(str(subtype), 0)),
 				hs.get("downed", false), hs.get("final_death", false),
 				hs.get("silence", false), hs.get("rot", false), hs.get("mark", false), hs.get("weaken", false),
+			])
+			file.store_line("sheet %s arm %s dodge %s pow %s crit %s thr %s" % [
+				subtype, shf.get("armor", 0), shf.get("dodge", 0), shf.get("power", 0), shf.get("crit", 0), shf.get("threat", 0),
 			])
 		for foe in snap.get("debug_foes", []):
 			file.store_line("foe %s %s hp %s/%s target %s room %s" % [foe.get("subtype", ""), foe.get("name", ""), foe.get("hp", 0), foe.get("hp_max", 0), foe.get("target", ""), foe.get("room", "")])
@@ -931,12 +990,20 @@ func _refresh_debug(snap: Dictionary) -> void:
 		snap.get("god_mode", false), snap.get("infinite_elixir", false),
 	]
 	body += "aggro %s  reason %s\n" % [meter.get("holder", ""), meter.get("reason", "")]
+	body += "variance penalty %s  next %s (%s)\n" % [
+		snap.get("variance_penalty", 0), snap.get("next_spawn_kind", ""), snap.get("next_spawn_why", ""),
+	]
 	var heroes2: Dictionary = snap.get("heroes", {})
+	var sheets: Dictionary = snap.get("sheets", {})
 	for subtype2 in ["michael", "raphael", "azrael", "uriel", "gabriel"]:
 		var hs2: Dictionary = heroes2.get(subtype2, {})
+		var sh: Dictionary = sheets.get(subtype2, {})
 		body += "%s hp %s/%s threat %s sil %s rot %s mark %s weak %s\n" % [
 			subtype2, hs2.get("hp", 0), hs2.get("hp_max", 0), int(threat_of.get(subtype2, 0)),
 			hs2.get("silence", false), hs2.get("rot", false), hs2.get("mark", false), hs2.get("weaken", false),
+		]
+		body += "sheet %s arm %s dodge %s pow %s crit %s thr %s\n" % [
+			subtype2, sh.get("armor", 0), sh.get("dodge", 0), sh.get("power", 0), sh.get("crit", 0), sh.get("threat", 0),
 		]
 	for foe2 in snap.get("debug_foes", []):
 		body += "foe %s %s/%s -> %s @ %s\n" % [foe2.get("name", ""), foe2.get("hp", 0), foe2.get("hp_max", 0), foe2.get("target", ""), foe2.get("room", "")]
@@ -1080,17 +1147,44 @@ func _act_ability(which: String) -> String:
 			return "self_shield"
 		"rescue":
 			return "emergency_res"
+		"cleanse":
+			return "cleanse"
+		"detect":
+			return "detect_pulse"
+		"burst":
+			return "burst"
 		_:
 			return ""
 
 
+func _on_tab(which: String) -> void:
+	select_tab(which)
+
+
+func select_tab(which: String) -> void:
+	if not TAB_ACTS.has(which):
+		return
+	_tab = which
+	if _built:
+		_layout_bottom()
+
+
 func _on_act(which: String) -> void:
+	if game == null:
+		return
+	if which == "detect":
+		game.armed = ""
+		game.command("detect", {})
+		return
+	if which == "cleanse":
+		game.armed = ""
+		game.command("cleanse", {})
+		return
 	var ability := _act_ability(which)
 	if ability == "":
 		return
 	if which == "team" or which == "shield":
-		if game != null:
-			game.armed = ""
+		game.armed = ""
 		if which == "shield":
 			game.command("shield", {})
 		else:
@@ -1119,13 +1213,147 @@ func _refresh_acts(snap: Dictionary) -> void:
 		_apply_ability_button(_acts[key], info)
 
 
+func _refresh_panic(snap: Dictionary) -> void:
+	var routed := {"taunt": "taunt", "team": "party_heal", "cleanse": "cleanse"}
+	for key in PANIC_ORDER:
+		if not _panic.has(key):
+			continue
+		var info: Dictionary = snap.abilities.get(str(routed[key]), {})
+		if info.is_empty():
+			continue
+		_apply_ability_button(_panic[key], info)
+
+
+func _place_tabs(y: float, w: float) -> void:
+	var left := 8.0 if w < 1200.0 else 200.0
+	var panic_w := 132.0
+	var gap := 8.0
+	var panic_total := panic_w * float(PANIC_ORDER.size()) + gap * float(PANIC_ORDER.size() - 1)
+	var panic_x := w - 8.0 - panic_total
+	var tab_right := panic_x - gap
+	var spans := float(TAB_ORDER.size() - 1) * gap
+	var tab_w: float = floor((tab_right - left - spans) / float(TAB_ORDER.size()))
+	if tab_w < 64.0:
+		tab_w = 64.0
+	var x := left
+	for name in TAB_ORDER:
+		if not _tabs.has(name):
+			continue
+		var tab: Button = _tabs[name]
+		tab.visible = true
+		tab.mouse_filter = Control.MOUSE_FILTER_STOP
+		tab.custom_minimum_size = Vector2(tab_w, 64)
+		tab.position = Vector2(x, y)
+		tab.size = Vector2(tab_w, 64)
+		tab.modulate = Color(1.4, 1.22, 0.72) if name == _tab else Color(1, 1, 1)
+		x += tab_w + gap
+	var px := panic_x
+	for pname in PANIC_ORDER:
+		if not _panic.has(pname):
+			continue
+		var panic: Button = _panic[pname]
+		panic.visible = true
+		panic.mouse_filter = Control.MOUSE_FILTER_STOP
+		panic.custom_minimum_size = Vector2(panic_w, 64)
+		panic.position = Vector2(px, y)
+		panic.size = Vector2(panic_w, 64)
+		px += panic_w + gap
+
+
 func _place_acts(y: float, bh: float, w: float, left: float) -> void:
-	var names := ["taunt", "shield", "mend", "team", "strike", "sunstrike", "block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]
+	var names: Array = TAB_ACTS.get(_tab, [])
 	var row: Array = []
 	for name in names:
-		if _acts.has(name):
-			row.append(_acts[name])
-	_place_row(row, y, bh, w, left)
+		if not _acts.has(name):
+			continue
+		var shown: Button = _acts[name]
+		shown.visible = true
+		shown.mouse_filter = Control.MOUSE_FILTER_STOP
+		row.append(shown)
+	_place_row(row, y, maxf(bh, 64.0), w, left)
+	var park := Vector2(left, y)
+	var park_size := Vector2(64, maxf(bh, 64.0))
+	if row.size() > 0:
+		var first: Button = row[0]
+		park = first.position
+		park_size = first.size
+	for key in _acts.keys():
+		if str(key) in names:
+			continue
+		var hidden: Button = _acts[key]
+		hidden.visible = false
+		hidden.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hidden.position = park
+		hidden.size = park_size
+
+
+func _cue_line(snap: Dictionary) -> String:
+	var parts: PackedStringArray = []
+	var meter: Dictionary = snap.get("threat", {})
+	var pulling := str(meter.get("pulling", ""))
+	if pulling != "":
+		parts.append("Taunt: %s is about to pull" % pulling.capitalize())
+	elif str(meter.get("reason", "")) == "mobs" and str(meter.get("holder", "")) != "":
+		parts.append("Taunt: %s holds" % str(meter.get("holder", "")).capitalize())
+	var commits: Array = snap.get("commitments", [])
+	if not commits.is_empty():
+		var c0: Dictionary = commits[0]
+		var left := maxi(0, int(c0.get("land", 0)) - int(snap.tick))
+		var plan := "Elite" if str(c0.get("plan", "")) == "elite" else "Traps"
+		parts.append("Shield: %s %0.1fs" % [plan, float(left) / 20.0])
+	var hurt := 0
+	var cursed := 0
+	var heroes: Dictionary = snap.get("heroes", {})
+	for sub in heroes.keys():
+		var hs: Dictionary = heroes[sub]
+		if bool(hs.get("downed", false)):
+			parts.append("Revive: %s %0.1fs" % [str(sub).capitalize(), float(hs.get("downed_left", 0)) / 20.0])
+		elif bool(hs.get("alive", false)) and int(hs.get("hp", 0)) < int(hs.get("hp_max", 1)):
+			hurt += 1
+		if bool(hs.get("silence", false)) or bool(hs.get("rot", false)) or bool(hs.get("mark", false)) or bool(hs.get("weaken", false)):
+			cursed += 1
+	if hurt == 1:
+		parts.append("Heal the wounded")
+	elif hurt > 1:
+		parts.append("Party Heal: %d wounded" % hurt)
+	var room := str(snap.get("party_room", ""))
+	if room.begins_with("fork"):
+		parts.append("Detect: read the fork before you commit")
+	var sheets: Dictionary = snap.get("sheets", {})
+	var az: Dictionary = sheets.get("azrael", {})
+	if int(az.get("dodge", 0)) > int(az.get("dodge_base", 0)):
+		parts.append("Dash: Dodge %d%%" % int(az.get("dodge", 0)))
+	if bool(snap.get("corruption", false)) or bool(snap.get("corruption_warn", false)):
+		parts.append("Cleanse: Corruption is ticking")
+	elif cursed > 0:
+		parts.append("Cleanse: %d cursed" % cursed)
+	var foes: Array = snap.get("foes", [])
+	if foes.size() > 0:
+		parts.append("%s: %d foes" % [str(snap.get("chosen_stance", "Stance")), foes.size()])
+	return "   ".join(parts)
+
+
+func _refresh_sheet(snap: Dictionary) -> void:
+	if _sheet == null:
+		return
+	if _highlight == "":
+		_sheet.visible = false
+		return
+	var sheet: Dictionary = snap.get("sheets", {}).get(_highlight, {})
+	if sheet.is_empty():
+		_sheet.visible = false
+		return
+	_sheet.visible = true
+	var mods := ""
+	for row in sheet.get("mods", []):
+		mods += "\n" + str(row)
+	_sheet.text = "%s\nHealth %d / %d\nArmor %d\nDodge %d%%\nPower %d\nCrit %d%%\nThreat %d%s" % [
+		_highlight.capitalize(),
+		int(sheet.get("health", 0)), int(sheet.get("health_max", 0)),
+		int(sheet.get("armor", 0)), int(sheet.get("dodge", 0)),
+		int(sheet.get("power", 0)), int(sheet.get("crit", 0)),
+		int(sheet.get("threat", 0)), mods,
+	]
 
 
 func _on_portrait(subtype: String) -> void:
@@ -1164,13 +1392,13 @@ func _on_press_fx(btn: Button) -> void:
 
 
 func _rewire_bar() -> void:
+	# The contextual row stays hidden. Hero tabs and the emergency strip
+	# are the only skill buttons.
 	var cmds := ["shield", "heal", "cleanse", "detect", "burst"]
 	for cmd in cmds:
 		var btn: Button = _bar[cmd]
-		btn.visible = true
-		_clear_pressed(btn)
-		btn.pressed.connect(_on_cmd.bind(cmd))
-		btn.pressed.connect(_on_press_fx.bind(btn))
+		btn.visible = false
+		btn.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 func _clear_pressed(btn: Button) -> void:

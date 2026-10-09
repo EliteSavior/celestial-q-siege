@@ -1,9 +1,9 @@
 class_name DungeonMap
 extends RefCounted
-## Three-stage siege. Each stage is a fork whose branches differ
-## (trapped / summoned / cursed), a reconvergence, and a stake.
-## Long marches between stages are where elixir actually compounds.
-## Shortest path is the east (summoned) branch; the other two are real detours.
+## Three-stage siege. The layout does not shuffle with the run seed.
+## Each fork: east short road is Still air (traps), north long road is
+## Skittering (summons), west long road is Whispers (curses). Branches
+## reconverge on the stake. A held nave sits between stages.
 
 const HALL := 4
 const MIN_THRONE_TILES := 800
@@ -66,18 +66,19 @@ func _build() -> void:
 ## ox shifts a whole fork → three branches → cross → stake cluster.
 func _cluster(ox: int, stage: int, depth: int, fork_id: String, fork_name: String, trap_id: String, trap_name: String, curse_id: String, curse_name: String, summon_id: String, summon_name: String, cross_id: String, cross_name: String, stake_id: String, stake_name: String, stake_kind: String, stake_glyph: String) -> void:
 	_rect(fork_id, fork_name, "fork", Rect2i(34 + ox, 38, 18, 18), "F", (depth - 1) if depth > 0 else 0, stage)
-	_rect(trap_id, trap_name, "trapped", Rect2i(34 + ox, 4, 22, 14), "T", depth, stage)
+	# East short = Still air. North long = Skittering. South tile reads as the west door = Whispers.
+	_rect(trap_id, trap_name, "trapped", Rect2i(70 + ox, 40, 22, 16), "T", depth, stage)
+	_rect(summon_id, summon_name, "summoned", Rect2i(34 + ox, 4, 22, 14), "M", depth, stage)
 	_rect(curse_id, curse_name, "cursed", Rect2i(34 + ox, 76, 22, 14), "C", depth, stage)
-	_rect(summon_id, summon_name, "summoned", Rect2i(70 + ox, 40, 22, 16), "M", depth, stage)
 	_rect(cross_id, cross_name, "cross", Rect2i(112 + ox, 40, 16, 16), "X", depth, stage)
 	_rect(stake_id, stake_name, stake_kind, Rect2i(148 + ox, 38, 18, 18), stake_glyph, depth, stage)
-	_hall("c_%s_t" % fork_id, "North door", stage, depth, Vector2i(40 + ox, 18), Vector2i(40 + ox, 37), [fork_id, trap_id])
-	_hall("c_%s_c" % fork_id, "South door", stage, depth, Vector2i(40 + ox, 56), Vector2i(40 + ox, 75), [fork_id, curse_id])
-	_hall("c_%s_s" % fork_id, "East door", stage, depth, Vector2i(52 + ox, 46), Vector2i(69 + ox, 46), [fork_id, summon_id])
-	_hall("c_%s_x" % summon_id, "Passage", stage, depth, Vector2i(92 + ox, 46), Vector2i(111 + ox, 46), [summon_id, cross_id])
-	_hall("c_%s_a" % trap_id, "High hall", stage, depth, Vector2i(56 + ox, 8), Vector2i(118 + ox, 8), [trap_id])
-	_hall("c_%s_b" % trap_id, "High hall", stage, depth, Vector2i(118 + ox, 12), Vector2i(118 + ox, 39), [cross_id])
-	_join("c_%s_a" % trap_id, "c_%s_b" % trap_id)
+	_hall("c_%s_n" % fork_id, "North door", stage, depth, Vector2i(40 + ox, 18), Vector2i(40 + ox, 37), [fork_id, summon_id])
+	_hall("c_%s_w" % fork_id, "West door", stage, depth, Vector2i(40 + ox, 56), Vector2i(40 + ox, 75), [fork_id, curse_id])
+	_hall("c_%s_e" % fork_id, "East door", stage, depth, Vector2i(52 + ox, 46), Vector2i(69 + ox, 46), [fork_id, trap_id])
+	_hall("c_%s_x" % trap_id, "Passage", stage, depth, Vector2i(92 + ox, 46), Vector2i(111 + ox, 46), [trap_id, cross_id])
+	_hall("c_%s_a" % summon_id, "High hall", stage, depth, Vector2i(56 + ox, 8), Vector2i(118 + ox, 8), [summon_id])
+	_hall("c_%s_b" % summon_id, "High hall", stage, depth, Vector2i(118 + ox, 12), Vector2i(118 + ox, 39), [cross_id])
+	_join("c_%s_a" % summon_id, "c_%s_b" % summon_id)
 	_hall("c_%s_a" % curse_id, "Low hall", stage, depth, Vector2i(56 + ox, 82), Vector2i(122 + ox, 82), [curse_id])
 	_hall("c_%s_b" % curse_id, "Low hall", stage, depth, Vector2i(122 + ox, 56), Vector2i(122 + ox, 81), [cross_id])
 	_join("c_%s_a" % curse_id, "c_%s_b" % curse_id)
@@ -432,11 +433,18 @@ func validate() -> Array:
 	var throne_path := path_between("start", "throne")
 	if throne_path.size() < MIN_THRONE_TILES:
 		errors.append("throne path %d tiles is under %d" % [throne_path.size(), MIN_THRONE_TILES])
-	for must in ["summoned", "seal", "gallery1", "summoned2", "font", "gallery2", "summoned3", "altar", "gallery3", "throne"]:
+	for must in ["trapped", "seal", "gallery1", "trapped2", "font", "gallery2", "trapped3", "altar", "gallery3", "throne"]:
 		if not _path_hits(throne_path, must):
 			errors.append("shortest path skips %s" % must)
-	# North and south branches are longer roads than the east (summoned) branch.
-	for pair in [["fork", "trapped", "cross", "summoned"], ["fork2", "cursed2", "cross2", "summoned2"], ["fork3", "trapped3", "cross3", "summoned3"]]:
+	# North (summons) and west (curses) are longer than the east (traps) road.
+	for pair in [
+		["fork", "summoned", "cross", "trapped"],
+		["fork", "cursed", "cross", "trapped"],
+		["fork2", "summoned2", "cross2", "trapped2"],
+		["fork2", "cursed2", "cross2", "trapped2"],
+		["fork3", "summoned3", "cross3", "trapped3"],
+		["fork3", "cursed3", "cross3", "trapped3"],
+	]:
 		var detour := path_between(pair[0], pair[1]).size() + path_between(pair[1], pair[2]).size()
 		var east := path_between(pair[0], pair[3]).size() + path_between(pair[3], pair[2]).size()
 		if detour <= east:

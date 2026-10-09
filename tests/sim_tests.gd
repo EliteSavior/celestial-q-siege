@@ -136,6 +136,18 @@ func run_all() -> int:
 		"test_revive_inside_window_and_while_paused",
 		"test_speed_resets_on_try_again",
 		"test_debug_spawn_is_visible_in_room",
+		"test_gabriel_tab_shows_cleanse",
+		"test_no_direct_dungeon_damage",
+		"test_curse_needs_a_vehicle",
+		"test_trap_can_carry_a_curse",
+		"test_director_varies_actions",
+		"test_occupied_room_threatened_within_two_seconds",
+		"test_east_road_is_not_quiet",
+		"test_same_seed_replays",
+		"test_dash_raises_dodge",
+		"test_fixed_fork_doors",
+		"test_popups_do_not_overlap",
+		"test_no_support_policy_loses",
 	]
 	ran = tests.size()
 	for name in tests:
@@ -584,6 +596,8 @@ func test_curse_telegraphs_before_it_lands() -> void:
 	var sim := CombatSim.new()
 	sim.director_enabled = false
 	sim.dark = 8000
+	var caster := _mob(sim, "imp", sim._hero("raphael").pos + Vector2i(400, 0), 500)
+	caster.atk_cd = 99999
 	var started := sim.tick
 	sim.submit("curse", {"kind": "mark", "target": "raphael"}, "demon", 1)
 	sim.tick_once()
@@ -687,8 +701,10 @@ func test_turtle_corruption() -> void:
 		idle_hp += int(a.hp)
 	for b in moving._angels():
 		move_hp += int(b.hp)
-	if idle_hp >= move_hp:
-		fail("corruption did not hurt the idle party %d vs %d" % [idle_hp, move_hp])
+	if idle_hp != move_hp:
+		fail("corruption damaged the idle party %d vs %d" % [idle_hp, move_hp])
+	if idle.dark <= moving.dark:
+		fail("corruption did not swell Dark %d vs %d" % [idle.dark, moving.dark])
 
 
 func test_echo_budget_scales_with_hp() -> void:
@@ -1449,6 +1465,9 @@ func test_director_curse_shows_a_cast_bar() -> void:
 	sim.director.fortified = {"seal": true, "font": true, "altar": true}
 	sim.director.committed["gallery1"] = 1
 	sim.director.resolved["gallery1"] = true
+	var caster := _mob(sim, "imp", sim._hero("raphael").pos + Vector2i(400, 0), 900)
+	caster.atk_cd = 99999
+	caster.home = "gallery1"
 	_ready_director(sim)
 	var saw := false
 	for _i in 80:
@@ -1837,14 +1856,28 @@ func test_azrael_kit() -> void:
 		fail("silence did not block burst")
 	var hp := int(rogue.hp)
 	_pay(flee, "escape_dash")
-	if Fixed.dist(rogue.pos, origin) <= Balance.HELLFLAME_RADIUS:
-		fail("dash stayed in the flame, dist %d" % Fixed.dist(rogue.pos, origin))
-	if int(rogue.untargetable_until) <= flee.tick:
-		fail("dash did not make Azrael untargetable")
-	for _k in 12:
-		flee.tick_once()
-	if int(rogue.hp) != hp:
-		fail("dash did not keep Azrael out of the flame")
+	if rogue.pos != origin:
+		fail("dash still hops")
+	if int(rogue.dodge_until) <= flee.tick or int(rogue.dodge_bonus) < Balance.DASH_DODGE:
+		fail("dash did not raise Dodge")
+	if int(flee.hero_sheet("azrael").dodge) < Balance.DASH_DODGE:
+		fail("sheet dodge %s" % str(flee.hero_sheet("azrael")))
+	var dodged := false
+	for _k in 48:
+		var before := int(rogue.hp)
+		flee._hurt(rogue, 20, "single", 0, false)
+		if int(rogue.hp) == before and bool(rogue.alive):
+			dodged = true
+			break
+		rogue.hp = hp
+		rogue.alive = true
+		rogue.final_death = false
+		rogue.downed_until = 0
+	if not dodged:
+		fail("dash never dodged a hit")
+	flee.tick = int(rogue.dodge_until)
+	if flee._dodge_of(rogue) != 0:
+		fail("dodge stayed up after the buff")
 
 
 func test_uriel_kit() -> void:
@@ -4237,6 +4270,8 @@ func test_director_casts_weaken() -> void:
 	sim.traps_placed = 8
 	sim.curses_cast = 3
 	sim.director.fortified = {"seal": true, "font": true, "altar": true}
+	var caster := _mob(sim, "imp", sim._hero("azrael").pos + Vector2i(500, 0), 800)
+	caster.atk_cd = 99999
 	_ready_director(sim)
 	var saw := false
 	for _i in 80:
@@ -4372,6 +4407,7 @@ func test_team_heal_button_is_its_own_control() -> void:
 	game.hud._brief.visible = false
 	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	game.hud._layout_bottom()
+	game.hud.select_tab("raphael")
 	if not game.hud._acts.has("team") or not game.hud._acts.has("mend"):
 		fail("team heal is not its own button next to single heal")
 		game.queue_free()
@@ -4460,19 +4496,19 @@ func test_team_heal_button_is_its_own_control() -> void:
 func test_doorway_fight_does_not_end_in_one_tick() -> void:
 	var sim := CombatSim.new()
 	sim.director_enabled = false
-	var center: Vector2i = sim.map.node_tile("summoned:center")
+	var center: Vector2i = sim.map.node_tile("trapped:center")
 	var imp_pos := Fixed.tile_center(center)
-	sim._make_mob("imp", "Imp", imp_pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], "summoned:center")
+	sim._make_mob("imp", "Imp", imp_pos, Balance.IMP_HP, Balance.IMP_ATK, Balance.IMP_PERIOD, Balance.IMP_RANGE, Balance.IMP_SPEED, [], "trapped:center")
 	var imp: Dictionary = sim.entities[sim.next_id - 1]
 	imp.active_at = 0
-	var door := _west_door(sim, "summoned")
+	var door := _west_door(sim, "trapped")
 	if door.is_empty():
-		fail("summoned has no west door")
+		fail("trapped has no west door")
 		return
 	var threshold: Vector2i = door.door
 	var outside: Vector2i = door.out
 	var dist := Fixed.dist(Fixed.tile_center(threshold), imp.pos)
-	if sim.map.id_at_tile(threshold) != "summoned" or sim.map.id_at_tile(outside) == "summoned":
+	if sim.map.id_at_tile(threshold) != "trapped" or sim.map.id_at_tile(outside) == "trapped":
 		fail("threshold %s / %s is not the room edge" % [threshold, outside])
 		return
 	if dist <= Balance.LEASH_RANGE:
@@ -4872,11 +4908,12 @@ func test_portrait_tap_does_not_swap_the_bar() -> void:
 	var main: Control = mounted[0]
 	var game = mounted[1]
 	var hud = game.hud
-	for key in ["block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue"]:
+	for key in ["block", "revive", "dash", "beam", "zone", "retreat", "aegis", "rescue", "cleanse", "detect"]:
 		if not hud._acts.has(key):
 			fail("bar is missing %s" % key)
 			main.queue_free()
 			return
+	var before_tab := str(hud._tab)
 	var before := _util_signature(hud)
 	if before.contains("Back"):
 		fail("bar opened on a kit: %s" % before)
@@ -4898,16 +4935,24 @@ func test_portrait_tap_does_not_swap_the_bar() -> void:
 		fail("portrait tap did not highlight Azrael (%s)" % str(hud._highlight))
 		main.queue_free()
 		return
+	if str(hud._tab) != before_tab:
+		fail("portrait tap swapped the hero tab to %s" % hud._tab)
+		main.queue_free()
+		return
+	if not str(hud._sheet.text).contains("Dodge"):
+		fail("portrait tap did not open the stat sheet: %s" % hud._sheet.text)
+		main.queue_free()
+		return
 	for cmd in hud._bar.keys():
 		if bool(hud._bar[cmd].visible):
 			fail("duplicate row showed %s after a portrait tap" % cmd)
 			main.queue_free()
 			return
-	for act_name in ["shield", "mend", "revive", "beam"]:
-		if not bool(hud._acts[act_name].visible):
-			fail("%s was hidden by a portrait tap" % act_name)
-			main.queue_free()
-			return
+	if not bool(hud._acts["shield"].visible) or bool(hud._acts["mend"].visible):
+		fail("portrait tap changed which hero's skills are showing")
+		main.queue_free()
+		return
+	hud.select_tab("azrael")
 	var az: Dictionary = game.sim._hero("azrael")
 	var az_pos: Vector2i = az.pos
 	game.sim.golden = 9000
@@ -4919,14 +4964,15 @@ func test_portrait_tap_does_not_swap_the_bar() -> void:
 		return
 	game.sim.tick_once()
 	game._process(0.0)
-	if int(az.untargetable_until) <= game.sim.tick and az.pos == az_pos:
-		fail("dash press did not cast")
+	if int(az.dodge_until) <= game.sim.tick or az.pos != az_pos:
+		fail("dash press did not raise Dodge")
 		main.queue_free()
 		return
 	if _util_signature(hud).contains("Back"):
 		fail("dash press swapped the bar %s" % _util_signature(hud))
 		main.queue_free()
 		return
+	hud.select_tab("raphael")
 	var raphael: Dictionary = game.sim._hero("raphael")
 	raphael.hp = int(raphael.hp_max) - 40
 	var hurt := int(raphael.hp)
@@ -5354,6 +5400,8 @@ func test_cleanse_clears_party_and_blocks_reapply() -> void:
 	if grace < 150 or grace > 170:
 		fail("grace was %d ticks" % grace)
 		return
+	var caster := _mob(sim, "imp", sim._hero("michael").pos + Vector2i(300, 0), 400)
+	caster.atk_cd = 99999
 	sim.dark = 9000
 	sim.submit("curse", {"kind": "rot", "target": "michael"}, "demon", 1)
 	for _i in Balance.CURSE_CAST + 8:
@@ -5482,3 +5530,324 @@ func test_debug_spawn_is_visible_in_room() -> void:
 	if not report.has("michael"):
 		fail("snapshot has no per-hero report")
 	main.queue_free()
+
+
+func test_gabriel_tab_shows_cleanse() -> void:
+	if host == null:
+		fail("scene test has no tree")
+		return
+	var game := GameRoot.new()
+	game.boot()
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	host.root.add_child(game)
+	_pin_screen(game)
+	_pin_screen(game.board)
+	_pin_screen(game.hud)
+	game.briefing = false
+	game.sim.director_enabled = false
+	game.hud._brief.visible = false
+	game.hud._brief.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.hud._layout_bottom()
+	game._process(0.0)
+	var cleanse: Button = game.hud._acts["cleanse"]
+	if bool(cleanse.visible):
+		fail("Cleanse is showing before Gabriel's tab")
+		game.queue_free()
+		return
+	if not bool(game.hud._panic["cleanse"].visible) or not bool(game.hud._panic["taunt"].visible) or not bool(game.hud._panic["team"].visible):
+		fail("emergency strip is not always visible")
+		game.queue_free()
+		return
+	game.hud._tabs["gabriel"].pressed.emit()
+	if str(game.hud._tab) != "gabriel" or not bool(cleanse.visible):
+		fail("Gabriel's tab did not show Cleanse")
+		game.queue_free()
+		return
+	var rect: Rect2 = cleanse.get_rect()
+	if rect.size.x < 64.0 or rect.size.y < 64.0:
+		fail("Cleanse touch target %s" % rect.size)
+		game.queue_free()
+		return
+	if rect.intersects(game.board.playfield_rect()):
+		fail("Cleanse overlaps the playfield %s" % rect)
+		game.queue_free()
+		return
+	var before := str(game.hud._tab)
+	game.hud._portraits["michael"].pressed.emit()
+	game._process(0.0)
+	if str(game.hud._tab) != before:
+		fail("portrait tap left Gabriel's tab")
+		game.queue_free()
+		return
+	if not str(game.hud._sheet.text).contains("Health") or not str(game.hud._sheet.text).contains("Threat"):
+		fail("stat sheet %s" % game.hud._sheet.text)
+		game.queue_free()
+		return
+	game.sim.golden = 9000
+	var queued := game.sim.queue.size()
+	cleanse.pressed.emit()
+	if game.sim.queue.size() != queued + 1:
+		fail("Cleanse did not submit")
+		game.queue_free()
+		return
+	game.queue_free()
+
+
+func test_no_direct_dungeon_damage() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	_stand(sim, "fork")
+	var hp := {}
+	for angel in sim._angels():
+		hp[int(angel.id)] = int(angel.hp)
+	for _i in Balance.TURTLE_TICKS + Balance.OPENING_GRACE_TICKS + 30:
+		sim.tick_once()
+	if sim.mob_count() != 0 or sim.traps_in_room("fork") != 0:
+		fail("the empty fork was not empty")
+		return
+	if not sim.corruption:
+		fail("idle corruption never warned")
+		return
+	for angel2 in sim._angels():
+		if int(angel2.hp) != int(hp[int(angel2.id)]):
+			fail("the dungeon damaged %s with no mob and no trap" % angel2.subtype)
+			return
+
+
+func test_curse_needs_a_vehicle() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	sim.submit("curse", {"kind": "mark", "target": "raphael"}, "demon", 1)
+	for _i in Balance.CURSE_CAST_MARK + 8:
+		sim.tick_once()
+	if int(sim._hero("raphael").mark_until) > sim.tick:
+		fail("a curse landed with no mob and no trap")
+		return
+	if not _feed(sim).contains("no one close"):
+		fail("missing vehicle fizzle: %s" % _feed(sim))
+		return
+	var caster := _mob(sim, "imp", sim._hero("raphael").pos + Vector2i(500, 0), 400)
+	caster.atk_cd = 99999
+	sim.dark = 9000
+	sim.submit("curse", {"kind": "mark", "target": "raphael"}, "demon", 1)
+	for _j in Balance.CURSE_CAST_MARK + 8:
+		sim.tick_once()
+	if int(sim._hero("raphael").mark_until) <= sim.tick:
+		fail("a nearby mob could not land the mark: %s" % _feed(sim))
+
+
+func test_trap_can_carry_a_curse() -> void:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.dark = 9000
+	sim.submit("trap", {"kind": "spike", "node": "trapped:rear", "curse": "rot"}, "demon", 1)
+	sim.tick_once()
+	var trap := _find_kind(sim, "trap")
+	if trap.is_empty() or str(trap.get("curse", "")) != "rot":
+		fail("trap did not keep its curse")
+		return
+	_place_party(sim, sim.map.node_tile("trapped:rear"))
+	sim.stance = CombatSim.STANCE_TIGHT
+	sim.tick_once()
+	var cursed := false
+	for angel in sim._angels():
+		if int(angel.rot_until) > sim.tick:
+			cursed = true
+	if not cursed:
+		fail("a sprung curse trap did not rot anyone: %s" % _feed(sim))
+
+
+func test_director_varies_actions() -> void:
+	var sim := CombatSim.new()
+	_stand(sim, "gallery1")
+	sim.dark = 10000
+	sim.visited["fork"] = true
+	sim.stage_reached = 1
+	sim.rooms_cleared = 2
+	_ready_director(sim)
+	var actions: Array = []
+	var seen := 0
+	for _i in 240:
+		sim.director.next_decision = 0
+		sim.tick_once()
+		var lines: Array = sim.debug_log
+		while seen < lines.size():
+			var text := str(lines[seen].get("text", ""))
+			seen += 1
+			if text.begins_with("buy "):
+				var detail := text.trim_prefix("buy ").split(" ")[0]
+				actions.append(detail.split(":")[0])
+	if actions.size() < 3:
+		fail("director made only %d decisions" % actions.size())
+		return
+	for i in range(2, actions.size()):
+		if actions[i] == actions[i - 1] and actions[i] == actions[i - 2]:
+			fail("action %s repeated 3 times: %s" % [actions[i], str(actions)])
+			return
+	var penalty_logged := false
+	for row in sim.debug_log:
+		if str(row.get("text", "")).begins_with("variance penalty"):
+			penalty_logged = true
+			break
+	if not penalty_logged:
+		fail("variance penalty was not logged")
+
+
+func test_occupied_room_threatened_within_two_seconds() -> void:
+	var sim := CombatSim.new()
+	_stand(sim, "gallery1")
+	sim.dark = 10000
+	sim.visited["fork"] = true
+	_ready_director(sim)
+	var armed_at := -1
+	var threatened := -1
+	for _i in 80:
+		sim.tick_once()
+		if armed_at < 0 and sim.director.committed.has("gallery1"):
+			armed_at = int(sim.director.committed["gallery1"])
+		if sim.mob_count() > 0 or sim.traps_in_room("gallery1") > 0:
+			threatened = sim.tick
+			break
+	if armed_at < 0:
+		fail("the occupied room was never scheduled")
+		return
+	if threatened < 0:
+		fail("gallery stayed empty: %s" % sim.debug_string())
+		return
+	if threatened - armed_at > 2:
+		fail("threat landed %d ticks after the 2s mark" % (threatened - armed_at))
+
+
+func test_east_road_is_not_quiet() -> void:
+	var sim := CombatSim.new()
+	var door: Vector2i = sim.map.node_tile("trapped:center")
+	if not _walk_to(sim, door, 20 * 90):
+		fail("could not walk the east road")
+		return
+	var entered := sim.tick
+	var seen := false
+	for _i in 50:
+		sim.tick_once()
+		if sim.traps_in_room("trapped") > 0 or sim.mob_count() > 0 or not sim.build_snapshot().get("commitments", []).is_empty():
+			seen = true
+			break
+	if not seen:
+		fail("Still air stayed quiet %d ticks after entry (%s)" % [sim.tick - entered, sim.debug_string()])
+
+
+func test_same_seed_replays() -> void:
+	var a := _seeded_dash(7)
+	var b := _seeded_dash(7)
+	var c := _seeded_dash(8)
+	if a.checksum() != b.checksum():
+		fail("seed 7 diverged %d vs %d" % [a.checksum(), b.checksum()])
+		return
+	if a.checksum() == c.checksum():
+		fail("different seeds produced the same run")
+
+
+func _seeded_dash(seed: int) -> CombatSim:
+	var sim := CombatSim.new()
+	sim.director_enabled = false
+	sim.submit("debug_seed", {"seed": seed})
+	sim.golden = 9000
+	sim.submit("ability", {"name": "escape_dash"})
+	sim.tick_once()
+	var az := sim._hero("azrael")
+	var full := int(az.hp)
+	for _i in 24:
+		sim._hurt(az, 12, "single", 0, false)
+		az.hp = full
+		az.alive = true
+	return sim
+
+
+func test_dash_raises_dodge() -> void:
+	var sim := _lab()
+	var az := sim._hero("azrael")
+	if int(sim.hero_sheet("azrael").dodge) != 0:
+		fail("base dodge is not 0")
+		return
+	_pay(sim, "escape_dash")
+	var sheet: Dictionary = sim.hero_sheet("azrael")
+	if int(sheet.dodge) < Balance.DASH_DODGE:
+		fail("dash sheet dodge %s" % str(sheet))
+		return
+	if not sheet.mods.has("Dash +%d Dodge" % Balance.DASH_DODGE):
+		fail("dash mod missing %s" % str(sheet.mods))
+		return
+	for _i in Balance.DASH_DODGE_TICKS:
+		sim.tick_once()
+	if int(sim.hero_sheet("azrael").dodge) != 0:
+		fail("dodge did not expire")
+	if int(az.dodge_until) > sim.tick:
+		fail("dodge timer still open")
+
+
+func test_fixed_fork_doors() -> void:
+	var map := DungeonMap.new()
+	var fork: Dictionary = map.by_id["fork"]
+	var by_kind := {}
+	for ex in fork.exits:
+		by_kind[str(ex.kind)] = ex
+	if str(by_kind.get("trapped", {}).get("hint", "")) != "Still air":
+		fail("east road is not Still air %s" % str(by_kind.get("trapped", {})))
+		return
+	if str(by_kind.get("summoned", {}).get("hint", "")) != "Skittering":
+		fail("north road is not Skittering")
+		return
+	if str(by_kind.get("cursed", {}).get("hint", "")) != "Whispers":
+		fail("west road is not Whispers")
+		return
+	var east := map.path_between("fork", "trapped").size() + map.path_between("trapped", "cross").size()
+	var north := map.path_between("fork", "summoned").size() + map.path_between("summoned", "cross").size()
+	var west := map.path_between("fork", "cursed").size() + map.path_between("cursed", "cross").size()
+	if north <= east or west <= east:
+		fail("long roads are not longer than the east road e=%d n=%d w=%d" % [east, north, west])
+		return
+	var short := map.path_between("start", "seal")
+	var hits_east := false
+	var hits_north := false
+	for tile in short:
+		var id := map.id_at_tile(tile)
+		if id == "trapped":
+			hits_east = true
+		if id == "summoned":
+			hits_north = true
+	if not hits_east or hits_north:
+		fail("shortest descent does not take Still air")
+
+
+func test_popups_do_not_overlap() -> void:
+	var board = preload("res://game/board_view.gd")
+	var items: Array = [
+		{"text": "Corruption 12", "unit": 1, "x": 400.0, "y": 300.0},
+		{"text": "Corruption 24 x2", "unit": 1, "x": 400.0, "y": 300.0},
+		{"text": "Rot 8", "unit": 2, "x": 400.0, "y": 300.0},
+		{"text": "Dodge", "unit": 3, "x": 402.0, "y": 298.0},
+		{"text": "Spike 32", "unit": 4, "x": 400.0, "y": 300.0},
+	]
+	var rects: Array = board.layout_popup_rects(items)
+	if rects.size() != items.size():
+		fail("popup layout dropped a label")
+		return
+	for i in rects.size():
+		for j in i:
+			if (rects[i] as Rect2).intersects(rects[j]):
+				fail("popup rects overlap %s and %s" % [rects[i], rects[j]])
+				return
+
+
+func test_no_support_policy_loses() -> void:
+	var run: Dictionary = _drive(preload("res://tests/no_support_policy.gd").new(), 20 * 60 * 16)
+	var sim = run.sim
+	var total_s := float(sim.tick) / 20.0
+	print("  no-support total=%0.1fs outcome=%s room=%s" % [total_s, sim.outcome, sim.party_room_id])
+	if sim.outcome == "angels":
+		fail("a party that never used Azrael or Gabriel still won")
+		return
+	if sim.outcome != "demon":
+		fail("no-support run soft-locked: %s" % sim.debug_string())

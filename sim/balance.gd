@@ -145,7 +145,24 @@ const THREAT_PULL_PCT := 85
 const SHIELD_WALL_TICKS := 60
 const BODY_BLOCK_TICKS := 80
 # Michael keeps this percent of incoming damage. Highest HP is on the hero row.
+# Armor is the reduction: 100 - MICHAEL_MITIGATION. Shield wall adds armor;
+# Mark subtracts it. The cap is applied in CombatSim._armor_of.
 const MICHAEL_MITIGATION := 75
+const ARMOR_MICHAEL := 25
+const ARMOR_CAP := 75
+const SHIELD_WALL_ARMOR := 50
+const MARK_ARMOR := 50
+const POWER_BASE := 100
+const CRIT_BASE := 0
+const CRIT_MULT := 200
+const DODGE_BASE := 0
+# Dash is a dodge buff, not a hop. 55% for 4 seconds.
+const DASH_DODGE := 55
+const DASH_DODGE_TICKS := 80
+const THREAT_MICHAEL := 1600
+const THREAT_BASE := 100
+# A curse lands only when a mob is this close, or a trap delivers it.
+const CURSE_NEAR := 8000
 # v1.1.3: elixir was never the limit. A party heal of 32 could not keep a
 # cursed party up, and a single heal halved by Rot landed around 31.
 const HEAL_SINGLE := 140

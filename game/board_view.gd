@@ -665,11 +665,21 @@ func _paint_world() -> void:
 			if hint != "":
 				_plaque(font, sp + Vector2(-34, -28), hint, Color(0.08, 0.06, 0.04), hc2, 15)
 			_text(font, sp + Vector2(-40, 18), str(ex2.label), HORIZONTAL_ALIGNMENT_LEFT, 120, 12, Color(1, 0.97, 0.88))
-	var pop_at := {}
-	for pop in snap.popups:
-		if font:
+	if font and not snap.popups.is_empty():
+		var pop_items: Array = []
+		for pop in snap.popups:
 			var age := int(snap.tick) - int(pop.tick)
-			var kind := str(pop.kind)
+			var origin := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.2)
+			pop_items.append({
+				"text": str(pop.text),
+				"unit": int(pop.get("unit", 0)),
+				"x": origin.x,
+				"y": origin.y,
+			})
+		var pop_rects: Array = layout_popup_rects(pop_items)
+		for i in snap.popups.size():
+			var pop2: Dictionary = snap.popups[i]
+			var kind := str(pop2.kind)
 			var colp := Color(1.0, 0.95, 0.82)
 			if kind == "bad":
 				colp = Color(1.0, 0.36, 0.3)
@@ -677,13 +687,9 @@ func _paint_world() -> void:
 				colp = Color(0.4, 1.0, 0.52)
 			elif kind == "dmg":
 				colp = Color(1.0, 0.92, 0.45)
-			var key := "%s,%s" % [pop.pos.x, pop.pos.y]
-			var n := int(pop_at.get(key, 0))
-			pop_at[key] = n + 1
-			var fan := Vector2(float(n % 3 - 1) * 28.0, -float(n / 3) * 18.0)
-			var at := _milli_screen(pop.pos) + Vector2(-14, -26 - float(age) * 1.4) + fan
-			_text(font, at + Vector2(1, 1), str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0, 0, 0, 0.85))
-			_text(font, at, str(pop.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, colp)
+			var at: Vector2 = pop_rects[i].position
+			_text(font, at + Vector2(1, 1), str(pop2.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0, 0, 0, 0.85))
+			_text(font, at, str(pop2.text), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, colp)
 	_draw_guide(font)
 	if str(snap.banner) != "" and font:
 		var bp := view_pos + Vector2(12, 36)
@@ -700,6 +706,44 @@ func _paint_world() -> void:
 		_text(font, view_pos + Vector2(12, view_size.y - 16), "Channeling %s  %d%%" % [stake_name, int(snap.altar_progress)], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.5))
 	elif bool(snap.get("channeling_shrine", false)) and font:
 		_text(font, view_pos + Vector2(12, view_size.y - 16), "Purifying shrine  %d%%" % int(snap.get("shrine_progress", 0)), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.55, 0.95, 0.9))
+
+
+## Lanes per unit, stacked inside a lane, then nudged until no two rects overlap.
+static func layout_popup_rects(items: Array) -> Array:
+	var lane_of := {}
+	var stack_of := {}
+	var next_lane := 0
+	var draft: Array = []
+	for item in items:
+		var row: Dictionary = item
+		var unit := int(row.get("unit", 0))
+		var key := str(unit) if unit != 0 else "%s,%s" % [row.get("x", 0), row.get("y", 0)]
+		if not lane_of.has(key):
+			lane_of[key] = next_lane
+			next_lane += 1
+			stack_of[key] = 0
+		var lane := int(lane_of[key])
+		var stack := int(stack_of[key])
+		stack_of[key] = stack + 1
+		var text := str(row.get("text", ""))
+		var w := clampf(float(text.length()) * 12.0 + 8.0, 48.0, 160.0)
+		var x := float(row.get("x", 0.0)) + float(lane) * 168.0
+		var y := float(row.get("y", 0.0)) - float(stack) * 28.0
+		draft.append(Rect2(x, y, w, 24.0))
+	for i in draft.size():
+		var guard := 0
+		while guard < 32:
+			var hit := false
+			for j in i:
+				if (draft[i] as Rect2).intersects(draft[j]):
+					hit = true
+					break
+			if not hit:
+				break
+			var cur: Rect2 = draft[i]
+			draft[i] = Rect2(cur.position.x, cur.position.y - 28.0, cur.size.x, cur.size.y)
+			guard += 1
+	return draft
 
 
 func _draw_kits(font) -> void:
